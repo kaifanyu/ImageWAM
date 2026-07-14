@@ -45,13 +45,19 @@ services:
 
     environment:
       HOME: /workspace/ImageWAM/.docker-home
-      HF_HOME: /workspace/ImageWAM/.cache/huggingface
+      # Points at the mounted host cache below, NOT into the repo -- the FLUX.2
+      # scripts pull Qwen/Qwen3-4B (~7.6GB) from here, and an empty HF_HOME means
+      # re-downloading it on first run.
+      HF_HOME: /workspace/hf-cache
 
     volumes:
       # Defaults to the repo containing this compose file, so it needs no editing
       # when the checkout lives somewhere else. Override with IMAGEWAM_REPO if
       # your data/checkpoints live on a different disk than the code.
       - "${IMAGEWAM_REPO:-..}:/workspace/ImageWAM"
+      # Hugging Face cache, mounted read-write so newly pulled models persist
+      # across `--rm` runs instead of being re-fetched every time.
+      - "${IMAGEWAM_HF_CACHE:-${HOME}/.cache/huggingface}:/workspace/hf-cache"
       # Shadow the host .env.local (which holds host-absolute paths) with the
       # container-path version. Nested mounts apply longest-path-last, so this
       # lands on top of the mount above.
