@@ -116,7 +116,11 @@ ENV NVIDIA_VISIBLE_DEVICES=all \
     NVIDIA_DRIVER_CAPABILITIES=compute,utility
 
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
+# Strip CRs defensively: a Windows checkout (core.autocrlf) yields a CRLF script,
+# and the kernel then fails to exec "#!/usr/bin/env bash\r". .gitattributes should
+# prevent this, but the image must not depend on the host's git config.
+RUN sed -i 's/\r$//' /usr/local/bin/entrypoint.sh \
+    && chmod +x /usr/local/bin/entrypoint.sh
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["bash"]

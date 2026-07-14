@@ -1,0 +1,30 @@
+# Everything in this repo ultimately runs inside a Linux container, so text files
+# must be LF in the working tree even on a Windows checkout. Without this, Git
+# for Windows (core.autocrlf=true by default) rewrites shell scripts to CRLF and
+# bash in the container fails with the cryptic:
+#     set: pipefail: invalid option name
+# because it reads the trailing \r as part of the argument.
+* text=auto eol=lf
+
+# Assets: never touch these.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.pt binary
+*.pth binary
+*.ckpt binary
+*.safetensors binary
+*.npy binary
+*.npz binary
+*.h5 binary
+*.hdf5 binary
+*.pkl binary
+*.zip binary
+*.gz binary
+*.tar binary
+*.mp4 binary
+*.stl binary
+*.dae binary
+*.glb binary
+*.gltf binary

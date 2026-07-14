@@ -316,3 +316,6 @@ one_goal*.txt
 before_*.png
 after_*.png
 preview_*.png
+
+# Repo-relative HF cache fallback (see docker/docker-compose.yml).
+.hf-cache/

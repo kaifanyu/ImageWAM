@@ -56,8 +56,11 @@ services:
       # your data/checkpoints live on a different disk than the code.
       - "${IMAGEWAM_REPO:-..}:/workspace/ImageWAM"
       # Hugging Face cache, mounted read-write so newly pulled models persist
-      # across `--rm` runs instead of being re-fetched every time.
-      - "${IMAGEWAM_HF_CACHE:-${HOME}/.cache/huggingface}:/workspace/hf-cache"
+      # across `--rm` runs instead of being re-fetched every time. The default is
+      # repo-relative rather than ${HOME}-based because PowerShell does not define
+      # HOME, and Compose would silently resolve the mount to "/.cache/huggingface".
+      # Point IMAGEWAM_HF_CACHE at an existing cache to avoid a ~7.6GB download.
+      - "${IMAGEWAM_HF_CACHE:-../.hf-cache}:/workspace/hf-cache"
       # Shadow the host .env.local (which holds host-absolute paths) with the
       # container-path version. Nested mounts apply longest-path-last, so this
       # lands on top of the mount above.
