@@ -1,0 +1,9 @@
+# The repo root holds ~60GB (checkpoints 25G, third_party 17G, data 8.8G, venvs 16G).
+# None of it belongs in the build context -- it is bind-mounted at runtime instead.
+# Deny everything, then re-allow only what the image actually builds from.
+*
+
+!pyproject.toml
+!uv.lock
+!src/
+!docker/entrypoint.sh

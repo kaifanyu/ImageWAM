@@ -284,3 +284,35 @@ third_party/RoboTwin/assets/*
 OPEN_SOURCE_RELEASE_PLAN.md
 docs/model_card_*.md
 docs/huggingface_model_card_template.md
+# --- Local fork additions -------------------------------------------------
+# Cloned benchmark/model sources with their own .git. LIBERO and flux2 are
+# ignored above; curobo was missed, and without this git records it as a broken
+# gitlink (a submodule pointer with no submodule config).
+third_party/curobo/
+
+# Machine-local env + tooling. .env.local is ignored above, but its backup was
+# not; it leaks absolute host paths.
+.env.local.bak
+*.env.bak
+docker/.env
+
+# Created by the container at runtime (HOME, caches) and by local tooling.
+# .localbin holds an absolute symlink that resolves on no other machine.
+.docker-home/
+.localbin/
+.vulkan/
+
+# Ad-hoc experiment inputs and outputs. Kept local: the filmstrips alone are
+# ~12MB each, and git keeps every blob forever.
+edit_traj/
+edit_steps/
+prompt_sweep_*/
+sweep_task*/
+verify_language_*/
+perturb_*.json
+robotwin_perturb.json
+one_task*.txt
+one_goal*.txt
+before_*.png
+after_*.png
+preview_*.png

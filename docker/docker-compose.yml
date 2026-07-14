@@ -1,0 +1,61 @@
+# Usage (from the repo root):
+#   docker compose -f docker/docker-compose.yml build
+#   docker compose -f docker/docker-compose.yml run --rm imagewam bash
+#
+# The repo is bind-mounted whole, so data/, checkpoints/, third_party/ and any
+# runs/ you produce are the same bytes as on the host -- nothing is copied. That
+# also means the ~50GB of weights and datasets is NOT in the image: on a new
+# machine you must bring those separately.
+#
+# Per-machine settings (uid, gid, userns) live in docker/.env, which Compose
+# loads automatically. Copy docker/.env.example to docker/.env on a new host.
+
+services:
+  imagewam:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      args:
+        # Baked into the image as a real passwd entry; must match the `user:`
+        # below or deepspeed's getpass.getuser() call raises KeyError on import.
+        UID: "${IMAGEWAM_UID:-1000}"
+        GID: "${IMAGEWAM_GID:-1000}"
+        # TRANSFORMERS_VERSION: "4.51.3"   # for OmniGen2 / Ovis instead of FLUX.2
+    image: imagewam:cu118
+
+    gpus: all
+
+    # Run as your host uid:gid so checkpoints and logs written into the mount
+    # do not come out root-owned.
+    user: "${IMAGEWAM_UID:-1000}:${IMAGEWAM_GID:-1000}"
+
+    # Only needed on daemons configured with userns-remap (this server is one:
+    # see /etc/subuid). Under the remap, container uids are shifted into a
+    # subordinate range, so a repo owned by host uid 3041 appears inside as
+    # 65534:65534 (nobody) and is unwritable even to container root. "host" opts
+    # this container out. Harmless on a normal daemon; set to "private" to
+    # restore default behaviour.
+    userns_mode: "${IMAGEWAM_USERNS:-host}"
+
+    # torch DataLoader workers communicate over /dev/shm; the 64MB default will
+    # throw "bus error" / "DataLoader worker killed" under any real batch size.
+    shm_size: "${IMAGEWAM_SHM_SIZE:-16gb}"
+
+    working_dir: /workspace/ImageWAM
+
+    environment:
+      HOME: /workspace/ImageWAM/.docker-home
+      HF_HOME: /workspace/ImageWAM/.cache/huggingface
+
+    volumes:
+      # Defaults to the repo containing this compose file, so it needs no editing
+      # when the checkout lives somewhere else. Override with IMAGEWAM_REPO if
+      # your data/checkpoints live on a different disk than the code.
+      - "${IMAGEWAM_REPO:-..}:/workspace/ImageWAM"
+      # Shadow the host .env.local (which holds host-absolute paths) with the
+      # container-path version. Nested mounts apply longest-path-last, so this
+      # lands on top of the mount above.
+      - ./env.local.docker:/workspace/ImageWAM/.env.local:ro
+
+    stdin_open: true
+    tty: true

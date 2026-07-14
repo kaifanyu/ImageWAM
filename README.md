@@ -1,5 +1,11 @@
 # ImageWAM
 
+> **This is a fork.** The upstream project is [yuyangalin/ImageWAM](https://github.com/yuyangalin/ImageWAM)
+> by Yuyang "Alice.L", used here under the MIT License (see [LICENSE](./LICENSE)).
+> All research credit belongs to the original authors; this fork adds a
+> containerized environment (see [docker/](./docker/)) and some local
+> experiment tooling.
+
 Official codebase for **ImageWAM: Do World Action Models Really Need Video Generation, or Just Image Editing?**
 
 [English](./README.md) | [中文](./README_zh.md) 
