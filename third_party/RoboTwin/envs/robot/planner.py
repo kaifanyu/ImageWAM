@@ -271,9 +271,17 @@ try:
             return result_p, result_q
     
 except Exception as e:
-    print('[planner.py]: Something wrong happened when importing CuroboPlanner! Please check if Curobo is installed correctly. If the problem still exists, you can install Curobo from https://github.com/NVlabs/curobo manually.')
-    print('Exception traceback:')
-    traceback.print_exc()
+    print('[planner.py]: Curobo not available; using a stub CuroboPlanner. '
+          'This is fine for policy evaluation with action_type="qpos" (no motion '
+          'planning is invoked) and embodiment planner="mplib_screw". '
+          'Install Curobo from https://github.com/NVlabs/curobo if you need it.')
+
+    class CuroboPlanner:  # fallback stub so `from .planner import CuroboPlanner` resolves
+        def __init__(self, *args, **kwargs):
+            raise RuntimeError(
+                "CuroboPlanner is unavailable (curobo is not installed). "
+                "Set the embodiment `planner` to 'mplib_screw'/'mplib_RRT', or install curobo."
+            )
 
 
 # ********************** MplibPlanner **********************

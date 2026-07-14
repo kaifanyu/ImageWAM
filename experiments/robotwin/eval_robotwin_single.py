@@ -242,7 +242,15 @@ def main(cfg: DictConfig):
     ]
 
     env = os.environ.copy()
-    env["CUDA_VISIBLE_DEVICES"] = str(cfg.gpu_id)
+    # By default the worker sees exactly one GPU, which forces the ImageWAM model
+    # AND SAPIEN's Vulkan renderer onto the same card. On an 11GB GPU that OOMs
+    # ("cannot create buffer") because the model alone needs ~10.7GB. Setting
+    # ROBOTWIN_CUDA_VISIBLE_DEVICES (e.g. "1,2") exposes two GPUs so the renderer
+    # can live on the first visible one while EVALUATION.device (e.g. "cuda:1")
+    # puts the model on the second.
+    env["CUDA_VISIBLE_DEVICES"] = os.environ.get(
+        "ROBOTWIN_CUDA_VISIBLE_DEVICES", str(cfg.gpu_id)
+    )
     env["PYTHONUNBUFFERED"] = "1"
 
     with open(log_file, "w", encoding="utf-8") as log_f:

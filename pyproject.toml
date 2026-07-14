@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "imagewam"
 version = "0.1.0"
 description = "ImageWAM: Do World Action Models Really Need Video Generation, or Just Image Editing?"
-requires-python = ">=3.10"
+requires-python = ">=3.11,<3.12"
 dependencies = [
   "accelerate==1.12.0",
   "av==16.0.1",
@@ -59,17 +59,11 @@ shared = [
   "ninja",
 ]
 
-dim = [
-  "mmcv-full==1.7.2",
-  "setuptools<70",
-  "wheel",
-  "ipdb",
-  "pyrallis",
-  "apex"
-]
-interndata_pretrain = [
-  "lerobot>=0.4"
-]
+# dim extra removed — mmcv-full==1.7.2 is unbuildable under modern setuptools.
+# DIM is an optional baseline only; not needed for ImageWAM inference/training.
+# To use DIM: uv pip install mmcv-full==1.7.2 --no-build-isolation (see comment below)
+# interndata_pretrain removed — lerobot>=0.4 conflicts with pinned wandb==0.23.1
+# and datasets==3.6.0. Only needed for internal data preprocessing, not LIBERO/RoboTwin.
 # uv pip install mmcv-full==1.7.2 --no-build-isolation
 
 [tool.setuptools.package-dir]

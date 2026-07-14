@@ -529,9 +529,9 @@ class ImageWAM(torch.nn.Module):
         )
         with torch.device("meta"):
             ae = AutoEncoder(AutoEncoderParams())
-        ae_state = load_sft(str(ae_model_path), device=str(device))
+        ae_state = load_sft(str(ae_model_path), device="cpu")
         ae.load_state_dict(ae_state, strict=True, assign=True)
-        ae = ae.to(device=device, dtype=torch_dtype).eval()
+        ae = ae.to(device="cpu", dtype=torch_dtype).eval()  # keep on CPU to avoid OOM on ≤11 GB GPUs; moved to GPU on demand in encode/decode
         if load_text_encoder:
             from types import SimpleNamespace
             from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -540,7 +540,7 @@ class ImageWAM(torch.nn.Module):
             qwen3_model = AutoModelForCausalLM.from_pretrained(
                 model_spec,
                 torch_dtype=torch_dtype,
-            ).to(device).eval()
+            ).to("cpu").eval()  # keep on CPU to save GPU VRAM; embeddings moved to GPU in _encode_flux2_prompts
             text_encoder = SimpleNamespace(
                 model=qwen3_model,
                 tokenizer=AutoTokenizer.from_pretrained(model_spec),
@@ -549,12 +549,14 @@ class ImageWAM(torch.nn.Module):
         else:
             text_encoder = None
 
+        # Pass vae=None and text_encoder=None so __init__'s self.to(device) does not
+        # move the AE or Qwen3 to GPU.  Both are set afterward to stay CPU-resident.
         model = cls(
             video_expert=video_expert,
             action_expert=action_expert,
             mot=mot,
-            vae=ae,
-            text_encoder=text_encoder,
+            vae=None,
+            text_encoder=None,
             tokenizer=None,
             text_dim=text_dim,
             proprio_dim=proprio_dim,
@@ -572,6 +574,9 @@ class ImageWAM(torch.nn.Module):
             qwen_context_len=int(qwen_context_len),
             pack_proprio_after_text=bool(pack_proprio_after_text),
         )
+        model._vae_cpu_offload = True
+        model.vae = ae  # CPU-resident; registered as submodule here, after to(device) already ran
+        model.text_encoder = text_encoder  # Qwen3 kept on CPU; set after to(device) to avoid GPU move
         model.model_paths = {
             "flux2": flux2_model_path,
             "flux2_src": flux2_src_path,
@@ -717,14 +722,19 @@ class ImageWAM(torch.nn.Module):
     def to(self, *args, **kwargs):
         super().to(*args, **kwargs)
         self.mot.to(*args, **kwargs)
-        if self.text_encoder is not None:
+        if self.text_encoder is not None and not getattr(self, "_vae_cpu_offload", False):
             if hasattr(self.text_encoder, "to"):
                 self.text_encoder.to(*args, **kwargs)
             elif hasattr(self.text_encoder, "model") and hasattr(self.text_encoder.model, "to"):
                 self.text_encoder.model.to(*args, **kwargs)
         if hasattr(self, "dim_projector"):
             self.dim_projector.to(*args, **kwargs)
-        self.vae.to(*args, **kwargs)
+        if self.vae is None:
+            pass
+        elif getattr(self, "_vae_cpu_offload", False):
+            self.vae.to("cpu")
+        else:
+            self.vae.to(*args, **kwargs)
         return self
 
     @staticmethod
@@ -1682,8 +1692,9 @@ class ImageWAM(torch.nn.Module):
             raise ValueError(f"`image` must be [B,3,H,W] or [3,H,W], got {tuple(image.shape)}")
         if image.shape[-2] % 16 != 0 or image.shape[-1] % 16 != 0:
             raise ValueError(f"FLUX.2 image spatial dims must be multiples of 16, got {tuple(image.shape[-2:])}")
-        image = image.to(device=self.device, dtype=self.torch_dtype, non_blocking=True)
-        latents = self.vae.encode(image).to(dtype=self.torch_dtype)
+        vae_device = next(iter(self.vae.parameters())).device
+        image = image.to(device=vae_device, dtype=self.torch_dtype, non_blocking=True)
+        latents = self.vae.encode(image).to(device=self.device, dtype=self.torch_dtype)
         tokens = Flux2VideoExpert.pack_latents(latents)
         _, _, latent_h, latent_w = latents.shape
         ids = Flux2VideoExpert.build_img_ids(
@@ -1703,7 +1714,8 @@ class ImageWAM(torch.nn.Module):
         latent_h = int(height) // 16
         latent_w = int(width) // 16
         latents = Flux2VideoExpert.unpack_latents(tokens, latent_h, latent_w)
-        image = self.vae.decode(latents.to(device=self.device, dtype=self.torch_dtype))
+        vae_device = next(iter(self.vae.parameters())).device
+        image = self.vae.decode(latents.to(device=vae_device, dtype=self.torch_dtype))
         return image.detach().float().clamp(-1, 1)
 
     @torch.no_grad()
@@ -3701,7 +3713,10 @@ class ImageWAM(torch.nn.Module):
         sigma_shift: Optional[float] = None,
         seed: Optional[int] = None,
         rand_device: str = "cpu",
+        step_callback: Optional[Any] = None,
     ) -> dict[str, Any]:
+        """`step_callback(step_idx, num_steps, latents)` is invoked after each denoise
+        step, letting a caller decode intermediate latents to visualize the edit."""
         from .flux2_video_expert import Flux2VideoExpert
 
         self.eval()
@@ -3749,7 +3764,8 @@ class ImageWAM(torch.nn.Module):
             dtype=latents_video.dtype,
             shift_override=sigma_shift,
         )
-        for step_t, step_delta in zip(infer_timesteps, infer_deltas):
+        total_steps = len(infer_timesteps)
+        for step_idx, (step_t, step_delta) in enumerate(zip(infer_timesteps, infer_deltas)):
             timestep_video = step_t.expand(batch_size).to(dtype=latents_video.dtype, device=self.device)
             video_pre = self.video_expert.pre_dit(
                 x=latents_video,
@@ -3772,6 +3788,8 @@ class ImageWAM(torch.nn.Module):
             tokens_out = self._forward_flux2_video_only(video_pre, attention_mask)
             pred_video = self.video_expert.post_dit(tokens_out, video_pre)
             latents_video = self.infer_video_scheduler.step(pred_video, step_delta, latents_video)
+            if step_callback is not None:
+                step_callback(step_idx, total_steps, latents_video)
 
         image = self._decode_flux2_image_tokens(latents_video, height=height, width=width)
         return {"image": image[0].detach().cpu()}

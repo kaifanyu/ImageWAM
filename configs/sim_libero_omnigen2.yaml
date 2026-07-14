@@ -27,6 +27,9 @@ EVALUATION:
   binarize_gripper: true
   use_action_ensembler: false
   visualize_future_video: false
+  object_overrides_file: null  # path to a JSON layout-perturbation spec (OOD testing)
+  prompt_override: null        # replace the task instruction text fed to the model (OOD prompts)
+  prompt_override_file: null   # same as prompt_override but read from a text file (avoids CLI quoting)
 
   action_horizon: null
   num_inference_steps: ${eval_num_inference_steps}

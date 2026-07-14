@@ -1,8 +1,60 @@
+import json
+import os
+
 import sapien.core as sapien
 import numpy as np
 import transforms3d as t3d
 import sapien.physx as sapienp
 from .create_actor import *
+
+# ---------------------------------------------------------------------------
+# Object-placement perturbation for OOD testing.
+#
+# Every task places its actors through rand_pose(), which samples
+#   x ~ U(xlim), y ~ U(ylim)
+# using the SAME limits that were used to collect the training data. So shifting
+# or widening those limits puts objects in configurations the model never saw =>
+# provably out-of-distribution.
+#
+# Enable by pointing this env var at a JSON spec (no-op when unset):
+#   export ROBOTWIN_POSE_PERTURB=/path/to/spec.json
+#
+# Spec (all keys optional):
+#   {
+#     "dx": 0.05,              # shift the x sampling range (metres)
+#     "dy": -0.05,             # shift the y sampling range
+#     "expand": 1.5,           # widen both ranges about their midpoint (1.0 = unchanged)
+#     "rotate_rand": true,     # force random yaw even if the task didn't ask for it
+#     "rotate_lim": [0, 0, 0.6]
+#   }
+# ---------------------------------------------------------------------------
+_PERTURB = None
+_PERTURB_LOADED = False
+
+
+def _get_perturb():
+    global _PERTURB, _PERTURB_LOADED
+    if not _PERTURB_LOADED:
+        _PERTURB_LOADED = True
+        path = os.environ.get("ROBOTWIN_POSE_PERTURB")
+        if path:
+            with open(path, "r", encoding="utf-8") as f:
+                _PERTURB = json.load(f)
+            print(f"[robotwin-perturb] active: {_PERTURB} (from {path})")
+    return _PERTURB
+
+
+def _apply_perturb(lim, shift, expand):
+    """Shift and/or widen a [lo, hi] sampling range about its midpoint."""
+    lo, hi = float(lim[0]), float(lim[1])
+    if expand is not None and expand != 1.0:
+        mid = 0.5 * (lo + hi)
+        half = 0.5 * (hi - lo) * float(expand)
+        lo, hi = mid - half, mid + half
+    if shift:
+        lo += float(shift)
+        hi += float(shift)
+    return np.array([lo, hi])
 
 
 def rand_pose(
@@ -20,6 +72,15 @@ def rand_pose(
         ylim = np.array([ylim[0], ylim[0]])
     if len(zlim) < 2 or zlim[1] < zlim[0]:
         zlim = np.array([zlim[0], zlim[0]])
+
+    _p = _get_perturb()
+    if _p:
+        _expand = _p.get("expand")
+        xlim = _apply_perturb(xlim, _p.get("dx"), _expand)
+        ylim = _apply_perturb(ylim, _p.get("dy"), _expand)
+        if _p.get("rotate_rand"):
+            rotate_rand = True
+            rotate_lim = _p.get("rotate_lim", rotate_lim)
 
     x = np.random.uniform(xlim[0], xlim[1])
     y = np.random.uniform(ylim[0], ylim[1])

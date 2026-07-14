@@ -751,6 +751,29 @@ def run_single_task(
     model_device: str,
 ) -> dict:
     env, task_description = get_libero_env(task, LIBERO_ENV_RESOLUTION, cfg.get("seed"))
+    # --- optional prompt override (OOD instruction text) ---
+    # NOTE: this changes ONLY the text fed to the model. The success checker still
+    # uses the BDDL goal, so a new-goal prompt is a behavioral probe (watch the
+    # video), not a scored task, unless you also author a matching BDDL goal.
+    _prompt_override = cfg.EVALUATION.get("prompt_override", None)
+    _prompt_file = cfg.EVALUATION.get("prompt_override_file", None)
+    if _prompt_file:
+        with open(str(_prompt_file), "r", encoding="utf-8") as _pf:
+            _prompt_override = _pf.read().strip()
+    if _prompt_override:
+        logging.info("[prompt] overriding instruction: %r -> %r", task_description, str(_prompt_override))
+        task_description = str(_prompt_override)
+    # --- optional object-location perturbation for OOD layout testing ---
+    # Prefer the forwarded Hydra key (survives the tmux worker launch); fall back
+    # to the env var for standalone/preview use.
+    _override_file = cfg.EVALUATION.get("object_overrides_file", None) or os.environ.get(
+        "LIBERO_OBJECT_OVERRIDES"
+    )
+    if _override_file:
+        from env_perturb import apply_perturbation, load_spec
+
+        initial_states = apply_perturbation(env, initial_states, load_spec(_override_file))
+        logging.info("[perturb] applied object overrides from %s", _override_file)
     visualize_future_video = bool(cfg.EVALUATION.get("visualize_future_video", False))
     results = {
         "successes": 0,
