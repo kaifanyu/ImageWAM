@@ -53,7 +53,7 @@ ARGS=(
   "+EVALUATION.traj_only=${TRAJ_ONLY:-}"
   "+EVALUATION.traj_force=${TRAJ_FORCE:-false}"
   "+EVALUATION.traj_suite=${TRAJ_SUITE:-libero_10}"
-  "+EVALUATION.traj_out_dir=${TRAJ_OUT_DIR:-/home/kaifany/project-data/ImageWAM/edit_traj}"
+  "+EVALUATION.traj_out_dir=${TRAJ_OUT_DIR:-${REPO_ROOT}/edit_traj}"
   hydra.run.dir=/tmp/imagewam_edit_traj
 )
 

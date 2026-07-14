@@ -8,8 +8,8 @@ a GPU rollout.
 Usage:
     python scripts/preview_layout.py \
         --suite libero_10 --task-id 4 \
-        --spec /home/kaifany/project-data/ImageWAM/perturb_task4.json \
-        --out-dir /home/kaifany/project-data/ImageWAM
+        --spec perturb_task4.json \
+        --out-dir .
 
 Requires (same as eval workers):
     export MUJOCO_GL=osmesa PYOPENGL_PLATFORM=osmesa

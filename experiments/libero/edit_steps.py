@@ -15,6 +15,7 @@ Driven by COMBOS below: each entry is (task_id, cond_slug, spec_path_or_None).
 """
 
 import logging
+import os
 from pathlib import Path
 
 import hydra
@@ -44,7 +45,7 @@ from libero.libero import benchmark
 
 from env_perturb import apply_perturbation, load_spec
 
-WORK = Path("/home/kaifany/project-data/ImageWAM")
+WORK = Path(os.environ.get("REPO_ROOT") or Path(__file__).resolve().parents[2])
 
 # (task_id, condition slug, perturbation spec or None)  -- None = original env
 COMBOS = [

@@ -9,12 +9,15 @@
 # Usage:  bash scripts/run_sweep_task5.sh
 set -euo pipefail
 
-REPO=/data3/kaifany/ImageWAM
+REPO="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 cd "$REPO"
-# shellcheck disable=SC1091
-source .venv/bin/activate
+# Already inside an activated env (e.g. the container venv)? Leave it alone.
+if [ -z "${VIRTUAL_ENV:-}" ]; then
+  # shellcheck disable=SC1091
+  source .venv/bin/activate
+fi
 
-WORK=/home/kaifany/project-data/ImageWAM
+WORK="${WORK:-$REPO}"
 TASK_FILE="$WORK/one_task5.txt"
 echo "libero_10,5" > "$TASK_FILE"
 

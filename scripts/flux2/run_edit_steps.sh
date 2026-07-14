@@ -47,7 +47,7 @@ ARGS=(
   "+EVALUATION.edit_steps=${EDIT_STEPS:-20}"
   "+EVALUATION.edit_trial=${EDIT_TRIAL:-0}"
   "+EVALUATION.edit_suite=${EDIT_SUITE:-libero_10}"
-  "+EVALUATION.edit_steps_out_dir=${EDIT_OUT_DIR:-/home/kaifany/project-data/ImageWAM/edit_steps}"
+  "+EVALUATION.edit_steps_out_dir=${EDIT_OUT_DIR:-${REPO_ROOT}/edit_steps}"
   hydra.run.dir=/tmp/imagewam_edit_steps
 )
 
