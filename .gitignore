@@ -306,6 +306,8 @@ docker/.env
 # ~12MB each, and git keeps every blob forever.
 edit_traj/
 edit_steps/
+baseline_edit_traj/
+baseline_edit_traj_*/
 prompt_sweep_*/
 sweep_task*/
 verify_language_*/

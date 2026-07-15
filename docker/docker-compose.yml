@@ -21,6 +21,9 @@ services:
         UID: "${IMAGEWAM_UID:-1000}"
         GID: "${IMAGEWAM_GID:-1000}"
         # TRANSFORMERS_VERSION: "4.51.3"   # for OmniGen2 / Ovis instead of FLUX.2
+        # Set to build a Qwen-Image-Edit-capable image (IMAGE_EDITOR=qwen). Empty
+        # by default so the FLUX baseline image is unchanged. See docker/.env.example.
+        DIFFUSERS_VERSION: "${IMAGEWAM_DIFFUSERS_VERSION:-}"
     image: imagewam:cu118
 
     gpus: all

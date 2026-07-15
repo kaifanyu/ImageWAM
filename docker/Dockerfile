@@ -62,6 +62,18 @@ ARG TRANSFORMERS_VERSION=4.56.1
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install "transformers==${TRANSFORMERS_VERSION}"
 
+# The FLUX.2 base-editor baseline needs nothing extra (it uses the vendored
+# third_party/flux2 source, not diffusers). The Qwen-Image-Edit baseline
+# (IMAGE_EDITOR=qwen) needs QwenImageEditPipeline, added in diffusers 0.35.
+# Default empty -> leave the uv-resolved diffusers (0.34.x) untouched, so the
+# tested FLUX image is unchanged. To build a Qwen-capable image:
+#   docker compose build --build-arg DIFFUSERS_VERSION=0.35.1
+ARG DIFFUSERS_VERSION=
+RUN --mount=type=cache,target=/root/.cache/uv \
+    if [ -n "${DIFFUSERS_VERSION}" ]; then \
+        uv pip install "diffusers==${DIFFUSERS_VERSION}"; \
+    fi
+
 # --- LIBERO evaluation stack (mirrors scripts/setup/_install_libero_env.sh) ---
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install \
