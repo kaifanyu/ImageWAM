@@ -424,6 +424,23 @@ LIBERO-plus:
 NUM_GPUS=8 bash scripts/ovis_u1/run_eval_ovis_libero_plus.sh
 ```
 
+### Direct endpoint baseline
+
+For the empty-table experiment that edits one terminal goal, samples multiple
+full simulator trajectories, and compares only their terminal renders in pixel
+and latent spaces, see [docs/endpoint_baseline_pipeline.md](docs/endpoint_baseline_pipeline.md).
+
+### Inspecting SVGD runs
+
+To watch how the particle rollouts of a finished SVGD run evolve across
+iterations in 3D, serve the local viewer:
+
+```bash
+imagewam_python experiments/libero/svgd_traj3d.py --runs-root runs
+```
+
+See [docs/svgd_trajectory_viewer.md](docs/svgd_trajectory_viewer.md).
+
 ## Release Checkpoints
 
 The following FLUX.2 ImageWAM checkpoints are available on Hugging Face:
@@ -485,4 +502,3 @@ If you find this repository helpful for your research, please cite our paper:
       url={https://arxiv.org/abs/2606.19531}, 
 }
 ```
-

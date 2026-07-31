@@ -1,0 +1,62 @@
+(define (problem LIBERO_Living_Room_Tabletop_Manipulation)
+  (:domain robosuite)
+  (:language move the robot arm across the cluttered living room table while keeping the gripper open)
+
+  (:regions
+    (plate_init_region
+      (:target living_room_table)
+      (:ranges ((0.16 -0.18 0.18 -0.16)))
+      (:yaw_rotation ((0.0 0.0)))
+    )
+    (red_mug_init_region
+      (:target living_room_table)
+      (:ranges ((0.17 0.14 0.19 0.16)))
+      (:yaw_rotation ((0.0 0.0)))
+    )
+    (porcelain_mug_init_region
+      (:target living_room_table)
+      (:ranges ((-0.21 -0.17 -0.19 -0.15)))
+      (:yaw_rotation ((0.0 0.0)))
+    )
+    (pudding_init_region
+      (:target living_room_table)
+      (:ranges ((-0.21 0.14 -0.19 0.16)))
+      (:yaw_rotation ((0.0 0.0)))
+    )
+    ; This transparent table site remains below LIBERO's Up threshold. Endpoint
+    ; success is evaluated numerically by sample_endpoint_trajectories.py.
+    (never_success_region
+      (:target living_room_table)
+      (:ranges ((0.00 0.00 0.01 0.01)))
+    )
+  )
+
+  (:fixtures
+    living_room_table - living_room_table
+  )
+
+  (:objects
+    porcelain_mug_1 - porcelain_mug
+    red_coffee_mug_1 - red_coffee_mug
+    plate_1 - plate
+    chocolate_pudding_1 - chocolate_pudding
+  )
+
+  (:obj_of_interest
+    porcelain_mug_1
+    red_coffee_mug_1
+    plate_1
+    chocolate_pudding_1
+  )
+
+  (:init
+    (On plate_1 living_room_table_plate_init_region)
+    (On red_coffee_mug_1 living_room_table_red_mug_init_region)
+    (On porcelain_mug_1 living_room_table_porcelain_mug_init_region)
+    (On chocolate_pudding_1 living_room_table_pudding_init_region)
+  )
+
+  (:goal
+    (And (Up living_room_table_never_success_region))
+  )
+)

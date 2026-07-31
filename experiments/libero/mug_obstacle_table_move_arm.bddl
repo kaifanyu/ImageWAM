@@ -1,0 +1,39 @@
+(define (problem LIBERO_Living_Room_Tabletop_Manipulation)
+  (:domain robosuite)
+  (:language move the robot arm from the left side to the right side of the living room table with a red mug in the middle of its path)
+
+  (:regions
+    ; The mug is centered on the straight Cartesian path:
+    ; start [-0.05, +0.22, 0.54] -> goal [-0.05, -0.22, 0.54].
+    (mug_path_midpoint_region
+      (:target living_room_table)
+      (:ranges ((-0.052 -0.002 -0.048 0.002)))
+      (:yaw_rotation ((0.0 0.0)))
+    )
+    ; Endpoint success is evaluated numerically by the trajectory harness.
+    (never_success_region
+      (:target living_room_table)
+      (:ranges ((0.00 0.10 0.01 0.11)))
+    )
+  )
+
+  (:fixtures
+    living_room_table - living_room_table
+  )
+
+  (:objects
+    red_coffee_mug_1 - red_coffee_mug
+  )
+
+  (:obj_of_interest
+    red_coffee_mug_1
+  )
+
+  (:init
+    (On red_coffee_mug_1 living_room_table_mug_path_midpoint_region)
+  )
+
+  (:goal
+    (And (Up living_room_table_never_success_region))
+  )
+)

@@ -59,6 +59,7 @@ COMMON+=(
   MULTIRUN.phases="${PHASES:-[clean,random]}"
   EVALUATION.skip_get_obs_within_replan="${SKIP_GET_OBS_WITHIN_REPLAN:-true}"
   EVALUATION.robotwin_camera_layout="${ROBOTWIN_CAMERA_LAYOUT:-compact_288x256}"
+  EVALUATION.save_model_outputs="${SAVE_MODEL_OUTPUTS:-false}"
 )
 
 imagewam_print_config SUITE TASK CKPT_PATH DATASET_STATS_PATH FLUX2_SRC FLUX2_MODEL_PATH FLUX2_AE_MODEL_PATH

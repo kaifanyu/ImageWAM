@@ -1,0 +1,798 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SVGD trajectory evolution — 3D</title>
+<style>
+  /* Palette roles: sequential blue ramp = objective energy (magnitude),
+     orange = the focused particle, aqua = the best particle of the iteration,
+     neutral ink = scene anchors (start / goal / bounds). Light and dark are
+     separately stepped, not flipped. */
+  :root {
+    color-scheme: light;
+    --surface-1: #fcfcfb;
+    --surface-2: #f9f9f7;
+    --text-primary: #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted: #898781;
+    --grid: #e1e0d9;
+    --axis: #c3c2b7;
+    --border: rgba(11, 11, 11, 0.10);
+    --focus: #eb6834;
+    --best: #1baf7a;
+    --accent: #2a78d6;
+    --accent-soft: rgba(42, 120, 214, 0.16);
+    --hover: rgba(11, 11, 11, 0.05);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --surface-1: #1a1a19;
+      --surface-2: #0d0d0d;
+      --text-primary: #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted: #898781;
+      --grid: #2c2c2a;
+      --axis: #383835;
+      --border: rgba(255, 255, 255, 0.10);
+      --focus: #d95926;
+      --best: #199e70;
+      --accent: #3987e5;
+      --accent-soft: rgba(57, 135, 229, 0.20);
+      --hover: rgba(255, 255, 255, 0.06);
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --surface-1: #1a1a19;
+    --surface-2: #0d0d0d;
+    --text-primary: #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted: #898781;
+    --grid: #2c2c2a;
+    --axis: #383835;
+    --border: rgba(255, 255, 255, 0.10);
+    --focus: #d95926;
+    --best: #199e70;
+    --accent: #3987e5;
+    --accent-soft: rgba(57, 135, 229, 0.20);
+    --hover: rgba(255, 255, 255, 0.06);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    display: grid;
+    grid-template-columns: 320px minmax(0, 1fr);
+    font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+    background: var(--surface-2);
+    color: var(--text-primary);
+  }
+
+  /* ---------- sidebar ---------- */
+  .sidebar {
+    background: var(--surface-1);
+    border-right: 1px solid var(--border);
+    overflow-y: auto;
+    padding: 16px 16px 32px;
+  }
+  .brand { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+  .brand h1 { font-size: 14px; margin: 0 0 2px; letter-spacing: -0.01em; }
+  .brand p { margin: 0 0 16px; color: var(--text-muted); font-size: 11px; }
+  .group { margin-bottom: 18px; }
+  .group > label,
+  .group-title {
+    display: block;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+    margin-bottom: 6px;
+  }
+  select, button, input[type="number"] {
+    font: inherit;
+    color: var(--text-primary);
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 8px;
+  }
+  select { width: 100%; }
+  button { cursor: pointer; }
+  button:hover { background: var(--hover); }
+  button.primary { background: var(--accent-soft); border-color: transparent; }
+  .checks { display: grid; gap: 6px; }
+  .checks label { display: flex; align-items: center; gap: 8px; color: var(--text-secondary); }
+  .checks input { accent-color: var(--accent); }
+
+  .stats { display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; }
+  .stats dt { color: var(--text-secondary); margin: 0; }
+  .stats dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  th, td { padding: 3px 4px; text-align: right; }
+  th { color: var(--text-muted); font-weight: 500; font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; }
+  th:first-child, td:first-child { text-align: left; }
+  tbody tr { cursor: pointer; border-top: 1px solid var(--border); }
+  tbody tr:hover { background: var(--hover); }
+  tbody tr.is-focus td:first-child { box-shadow: inset 3px 0 0 var(--focus); }
+  tbody tr.is-best td:first-child { box-shadow: inset 3px 0 0 var(--best); }
+  tbody tr.is-focus.is-best td:first-child { box-shadow: inset 3px 0 0 var(--focus), inset 6px 0 0 var(--best); }
+  details summary { cursor: pointer; color: var(--text-muted); font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 8px; }
+
+  /* ---------- main ---------- */
+  main { display: grid; grid-template-rows: auto minmax(0, 1fr) 170px auto; min-width: 0; }
+  header {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 10px 16px; border-bottom: 1px solid var(--border); background: var(--surface-1);
+  }
+  header h2 { font-size: 13px; margin: 0; font-weight: 600; }
+  .chip {
+    font-size: 11px; color: var(--text-secondary);
+    background: var(--surface-2); border: 1px solid var(--border);
+    border-radius: 999px; padding: 2px 8px;
+  }
+  .spacer { margin-left: auto; }
+  #scene { min-height: 0; }
+  #energy { border-top: 1px solid var(--border); }
+  footer {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 16px; border-top: 1px solid var(--border); background: var(--surface-1);
+  }
+  footer input[type="range"] { flex: 1; accent-color: var(--accent); }
+  .iter-label { font-variant-numeric: tabular-nums; color: var(--text-secondary); min-width: 128px; }
+  .hint { color: var(--text-muted); font-size: 11px; }
+  .msg { padding: 24px; color: var(--text-secondary); }
+  .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; vertical-align: -1px; margin-right: 4px; }
+</style>
+</head>
+<body>
+<aside class="sidebar">
+  <div class="brand">
+    <div>
+      <h1>Trajectory evolution</h1>
+      <p>SVGD rollouts in 3D</p>
+    </div>
+    <button id="theme" title="Toggle light / dark">◐</button>
+  </div>
+
+  <div class="group">
+    <label for="trial">Run</label>
+    <select id="trial"></select>
+  </div>
+
+  <div class="group">
+    <label for="focus">Show</label>
+    <select id="focus"></select>
+  </div>
+
+  <div class="group">
+    <span class="group-title">Layers</span>
+    <div class="checks">
+      <label><input type="checkbox" id="opt-paths" checked> Rollout paths</label>
+      <label><input type="checkbox" id="opt-endpoints" checked> <span id="lbl-endpoints">Endpoints</span></label>
+      <label><input type="checkbox" id="opt-trails" checked> <span id="lbl-trails">Endpoint trails</span> (iterations so far)</label>
+      <label><input type="checkbox" id="opt-ghosts"> Ghost paths (5 previous iterations)</label>
+      <label><input type="checkbox" id="opt-anchors" checked> Start / goal anchors</label>
+      <label><input type="checkbox" id="opt-bounds" checked> Search bounds box</label>
+      <label><input type="checkbox" id="opt-equal"> True proportions (equal axes)</label>
+    </div>
+    <p class="hint" style="margin:6px 0 0">Axes are stretched to a cube by default —
+      x spans centimetres where y spans tens. Tick above for metric proportions.</p>
+  </div>
+
+  <div class="group">
+    <span class="group-title">Iteration <span id="stat-iter"></span></span>
+    <dl class="stats" id="stats"></dl>
+  </div>
+
+  <div class="group">
+    <details open>
+      <summary>Particles this iteration</summary>
+      <table>
+        <thead><tr><th>Particle</th><th id="th-energy">energy</th><th>Δ best</th><th>goal err</th></tr></thead>
+        <tbody id="ptable"></tbody>
+      </table>
+    </details>
+  </div>
+</aside>
+
+<main>
+  <header>
+    <h2 id="title">Loading…</h2>
+    <span id="chips"></span>
+    <span class="spacer"></span>
+    <span class="hint">← → step · space play</span>
+  </header>
+  <div id="scene"></div>
+  <div id="energy"></div>
+  <footer>
+    <button id="play" class="primary">▶ Play</button>
+    <button id="prev">◀</button>
+    <button id="next">▶</button>
+    <input type="range" id="slider" min="0" max="0" value="0" />
+    <span class="iter-label" id="iterLabel">iteration 0</span>
+    <select id="speed" style="width:auto">
+      <option value="700">0.5×</option>
+      <option value="350" selected>1×</option>
+      <option value="150">2×</option>
+      <option value="60">4×</option>
+    </select>
+  </footer>
+</main>
+
+<script src="/static/plotly.min.js"></script>
+<script>
+if (!window.Plotly) {
+  document.write('<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"><\/script>');
+}
+</script>
+<script>
+"use strict";
+
+// --- palette ------------------------------------------------------------- //
+// Sequential blue ramp carries the objective energy. Its ends are stepped per
+// mode so the "good" end always sits high-contrast against the surface.
+const RAMP_LIGHT = ["#0d366b","#104281","#184f95","#1c5cab","#256abf","#2a78d6",
+                    "#3987e5","#5598e7","#6da7ec","#86b6ef","#9ec5f4"];
+const RAMP_DARK  = ["#cde2fb","#b7d3f6","#9ec5f4","#86b6ef","#6da7ec","#5598e7",
+                    "#3987e5","#2a78d6","#256abf","#1c5cab","#184f95"];
+
+function theme() {
+  const css = getComputedStyle(document.documentElement);
+  const v = (name) => css.getPropertyValue(name).trim();
+  const dark = css.colorScheme.includes("dark");
+  return {
+    dark,
+    surface: v("--surface-1"),
+    ink: v("--text-primary"),
+    secondary: v("--text-secondary"),
+    muted: v("--text-muted"),
+    grid: v("--grid"),
+    axis: v("--axis"),
+    focus: v("--focus"),
+    best: v("--best"),
+    accent: v("--accent"),
+    ramp: dark ? RAMP_DARK : RAMP_LIGHT,
+  };
+}
+const colorscale = (ramp) => ramp.map((c, i) => [i / (ramp.length - 1), c]);
+function rampColor(ramp, t) {
+  if (!isFinite(t)) return ramp[Math.floor(ramp.length / 2)];
+  const i = Math.round(Math.min(1, Math.max(0, t)) * (ramp.length - 1));
+  return ramp[i];
+}
+
+// --- state --------------------------------------------------------------- //
+const state = {
+  trials: [],
+  bundle: null,
+  iter: 0,
+  focus: "all",           // "all" | "best" | "gbest" | particle index
+  playing: false,
+  timer: null,
+  opts: {},
+};
+const el = (id) => document.getElementById(id);
+// Endpoint runs move their target endpoint; path runs share one fixed endpoint
+// and move the arc instead, so the per-particle marker is the path apex.
+const markersOf = (frame) => frame.markers || frame.targets;
+const fmt = (x, n = 4) => (x == null || !isFinite(x) ? "—" : Number(x).toFixed(n));
+const xyz = (p, n = 3) => (p ? `(${p.map((v) => v.toFixed(n)).join(", ")})` : "—");
+
+// --- data loading -------------------------------------------------------- //
+async function loadTrials() {
+  const data = await (await fetch("/api/trials")).json();
+  state.trials = data.trials;
+  const select = el("trial");
+  select.innerHTML = "";
+  let scene = null, group = null;
+  for (const trial of data.trials) {
+    if (trial.scene !== scene) {
+      scene = trial.scene;
+      group = document.createElement("optgroup");
+      group.label = scene;
+      select.appendChild(group);
+    }
+    const option = document.createElement("option");
+    option.value = trial.key;
+    option.textContent = `${trial.label}  ·  ${trial.objective ?? "?"}  ·  ` +
+      `${trial.particles}p × ${trial.iterations}it`;
+    group.appendChild(option);
+  }
+  if (!data.trials.length) {
+    el("title").textContent = `No trials with saved rollout traces under ${data.runs_root}`;
+    return;
+  }
+  const wanted = new URLSearchParams(location.search).get("trial");
+  select.value = data.trials.some((t) => t.key === wanted) ? wanted : data.trials[0].key;
+  await loadBundle(select.value);
+}
+
+async function loadBundle(key) {
+  stop();
+  el("title").textContent = "Loading " + key + " …";
+  const response = await fetch("/api/bundle?key=" + encodeURIComponent(key));
+  const bundle = await response.json();
+  if (bundle.error) { el("title").textContent = bundle.error; return; }
+
+  // Energy range is global across iterations so colour is comparable frame to
+  // frame; axis ranges are global so the camera never jumps mid-animation.
+  const energies = bundle.frames.flatMap((f) => f.energies).filter(isFinite);
+  bundle.eMin = Math.min(...energies);
+  bundle.eMax = Math.max(...energies);
+  const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+  const extend = (point) => {
+    if (!point) return;
+    for (let k = 0; k < 3; k++) {
+      if (!isFinite(point[k])) continue;
+      lo[k] = Math.min(lo[k], point[k]);
+      hi[k] = Math.max(hi[k], point[k]);
+    }
+  };
+  for (const frame of bundle.frames) {
+    (frame.paths || []).forEach((path) => path && path.forEach(extend));
+    (markersOf(frame) || []).forEach(extend);
+    (frame.object_starts || []).forEach((o) => o && o.forEach(extend));
+    (frame.object_ends || []).forEach((o) => o && o.forEach(extend));
+  }
+  // Anchors count toward the framing; the search-bounds box deliberately does
+  // not -- it is usually far larger than the region the particles ever visit.
+  extend(bundle.start_eef); extend(bundle.goal_eef); extend(bundle.target_eef);
+  bundle.ranges = [0, 1, 2].map((k) => {
+    const pad = Math.max((hi[k] - lo[k]) * 0.08, 0.004);
+    return [lo[k] - pad, hi[k] + pad];
+  });
+
+  state.bundle = bundle;
+  state.iter = 0;
+  state.focus = "all";
+  buildFocusOptions();
+  el("slider").max = String(bundle.frames.length - 1);
+  el("slider").value = "0";
+  renderHeader();
+  render(true);
+}
+
+function buildFocusOptions() {
+  const select = el("focus");
+  select.innerHTML = "";
+  const add = (value, text) => select.add(new Option(text, value));
+  add("all", "All particles");
+  add("best", "Best particle of each iteration");
+  add("gbest", "Global best particle");
+  for (let p = 0; p < state.bundle.particles; p++) {
+    add(String(p), `Particle ${String(p).padStart(2, "0")}`);
+  }
+  select.value = "all";
+}
+
+// --- header / stats ------------------------------------------------------ //
+function renderHeader() {
+  const b = state.bundle;
+  const trial = state.trials.find((t) => t.key === b.key);
+  const label = trial ? trial.label : b.key;
+  const title = el("title");
+  title.textContent = label.split("/").slice(-2).join("/");
+  title.title = b.key;
+  const marker = b.marker_label ?? "endpoints";
+  const Marker = marker[0].toUpperCase() + marker.slice(1);
+  el("lbl-endpoints").textContent = Marker;
+  el("lbl-trails").textContent = Marker.replace(/e?s$/, "") + " trails";
+  const chips = [
+    b.objective ?? "objective ?",
+    `${b.kind} search`,
+    `${b.particles} particles`,
+    `${b.frames.length} iterations`,
+  ];
+  if (b.config.transport) chips.push(b.config.transport);
+  if (b.config.step_size != null) chips.push(`step ${b.config.step_size}`);
+  el("chips").innerHTML = chips.map((c) => `<span class="chip">${c}</span>`).join(" ");
+  el("th-energy").textContent = b.objective ?? "energy";
+}
+
+function renderStats() {
+  const b = state.bundle, frame = b.frames[state.iter];
+  const energies = frame.energies;
+  const mean = energies.reduce((a, c) => a + c, 0) / energies.length;
+  const best = frame.best_particle ?? energies.indexOf(Math.min(...energies));
+  const rows = [
+    [`<span class="swatch" style="background:var(--best)"></span>best particle`,
+      `P${String(best).padStart(2, "0")}`],
+    [`min ${b.objective ?? "energy"}`, fmt(Math.min(...energies))],
+    ["mean", fmt(mean)],
+    ["max", fmt(Math.max(...energies))],
+  ];
+  if (frame.particle_spread_m != null) rows.push(["spread", fmt(frame.particle_spread_m) + " m"]);
+  if (frame.goal_errors_m) rows.push(["min goal error", fmt(Math.min(...frame.goal_errors_m)) + " m"]);
+  if (frame.global_best_energy != null) {
+    rows.push(["global best", `${fmt(frame.global_best_energy)} @ it ${frame.global_best_iteration}`
+      + ` P${String(frame.global_best_particle).padStart(2, "0")}`]);
+  }
+  if (b.start_eef) rows.push(["start eef", xyz(b.start_eef)]);
+  if (b.goal_eef) rows.push([b.goal_is_diagnostic_only ? "goal eef (diagnostic)" : "goal eef", xyz(b.goal_eef)]);
+  el("stat-iter").textContent = frame.iteration;
+  el("stats").innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
+
+  // Table view: the readable-without-colour channel, and a click-to-focus list.
+  const focus = focusIndex();
+  const minEnergy = Math.min(...energies);
+  const order = energies.map((e, p) => [e, p]).sort((a, c) => a[0] - c[0]);
+  el("ptable").innerHTML = order.map(([energy, p]) => {
+    const classes = [p === focus ? "is-focus" : "", p === best ? "is-best" : ""].join(" ");
+    const goal = frame.goal_errors_m ? fmt(frame.goal_errors_m[p], 3) : "—";
+    return `<tr class="${classes}" data-particle="${p}">` +
+      `<td>P${String(p).padStart(2, "0")}</td><td>${fmt(energy)}</td>` +
+      `<td>${fmt(energy - minEnergy)}</td><td>${goal}</td></tr>`;
+  }).join("");
+}
+
+// --- 3D scene ------------------------------------------------------------ //
+function focusIndex() {
+  const b = state.bundle, frame = b.frames[state.iter];
+  if (state.focus === "best") return frame.best_particle ?? null;
+  if (state.focus === "gbest") return frame.global_best_particle ?? null;
+  if (state.focus === "all") return null;
+  return Number(state.focus);
+}
+
+function lineTrace(path, name, color, width, opacity, hover) {
+  return {
+    type: "scatter3d", mode: "lines", name, showlegend: false,
+    x: path.map((p) => p[0]), y: path.map((p) => p[1]), z: path.map((p) => p[2]),
+    line: { color, width },
+    opacity,
+    hovertemplate: hover + "<br>x %{x:.4f}  y %{y:.4f}  z %{z:.4f}<extra></extra>",
+  };
+}
+
+function sceneTraces(t) {
+  const b = state.bundle, frame = b.frames[state.iter], opts = state.opts;
+  const focus = focusIndex();
+  const span = Math.max(b.eMax - b.eMin, 1e-9);
+  const norm = (energy) => (energy - b.eMin) / span;
+  const traces = [];
+
+  // Ghosts: where the population was in the previous few iterations.
+  if (opts.ghosts) {
+    const gx = [], gy = [], gz = [];
+    for (let i = Math.max(0, state.iter - 5); i < state.iter; i++) {
+      for (const path of state.bundle.frames[i].paths || []) {
+        if (!path) continue;
+        for (const p of path) { gx.push(p[0]); gy.push(p[1]); gz.push(p[2]); }
+        gx.push(null); gy.push(null); gz.push(null);
+      }
+    }
+    if (gx.length) {
+      traces.push({ type: "scatter3d", mode: "lines", name: "previous iterations",
+        x: gx, y: gy, z: gz, line: { color: t.muted, width: 1 }, opacity: 0.22,
+        hoverinfo: "skip", showlegend: false });
+    }
+  }
+
+  // Rollout paths, one line per particle.
+  if (opts.paths) {
+    (frame.paths || []).forEach((path, p) => {
+      if (!path) return;
+      const energy = frame.energies[p];
+      const isFocus = focus === p;
+      const dimmed = focus !== null && !isFocus;
+      const color = dimmed ? t.muted : (isFocus ? t.focus : rampColor(t.ramp, norm(energy)));
+      traces.push(lineTrace(path, `P${p}`, color, isFocus ? 5 : 2, dimmed ? 0.25 : 0.9,
+        `<b>P${String(p).padStart(2, "0")}</b> · it ${frame.iteration}` +
+        `<br>${b.objective ?? "energy"} ${fmt(energy)}`));
+    });
+  }
+
+  // Endpoints of this iteration, coloured by energy (the ramp's colourbar is
+  // the legend for magnitude).
+  if (opts.endpoints) {
+    const pts = (markersOf(frame) || []).map((p, i) => [p, i]).filter(([p]) => p);
+    traces.push({
+      type: "scatter3d", mode: "markers", name: "endpoints",
+      x: pts.map(([p]) => p[0]), y: pts.map(([p]) => p[1]), z: pts.map(([p]) => p[2]),
+      marker: {
+        size: 6, opacity: 0.95,
+        color: pts.map(([, i]) => frame.energies[i]),
+        colorscale: colorscale(t.ramp), cmin: b.eMin, cmax: b.eMax,
+        line: { color: t.surface, width: 1 },
+        colorbar: {
+          title: { text: b.objective ?? "energy", font: { size: 11, color: t.secondary } },
+          thickness: 10, len: 0.55, x: 1.0, tickfont: { size: 10, color: t.muted },
+          outlinewidth: 0, bgcolor: "rgba(0,0,0,0)",
+        },
+      },
+      customdata: pts.map(([, i]) => [i, frame.energies[i]]),
+      hovertemplate: "<b>P%{customdata[0]}</b> endpoint<br>" +
+        (b.objective ?? "energy") + " %{customdata[1]:.4f}" +
+        "<br>x %{x:.4f}  y %{y:.4f}  z %{z:.4f}<extra></extra>",
+      showlegend: false,
+    });
+  }
+
+  // Trails: each particle's endpoint across the iterations seen so far.
+  if (opts.trails) {
+    const trail = (indices, color, width, opacity, name) => {
+      const x = [], y = [], z = [];
+      for (const p of indices) {
+        for (let i = 0; i <= state.iter; i++) {
+          const point = (markersOf(state.bundle.frames[i]) || [])[p];
+          if (point) { x.push(point[0]); y.push(point[1]); z.push(point[2]); }
+        }
+        x.push(null); y.push(null); z.push(null);
+      }
+      traces.push({ type: "scatter3d", mode: "lines", name, x, y, z,
+        line: { color, width }, opacity, hoverinfo: "skip", showlegend: false });
+    };
+    const all = [...Array(b.particles).keys()];
+    if (focus === null) trail(all, t.muted, 1, 0.45, "endpoint trails");
+    else {
+      trail(all.filter((p) => p !== focus), t.muted, 1, 0.18, "endpoint trails");
+      trail([focus], t.focus, 4, 0.9, "focused trail");
+    }
+  }
+
+  // Best particle of this iteration: shape + direct label, so it never relies
+  // on hue alone.
+  const best = frame.best_particle;
+  const bestPoint = best != null ? (markersOf(frame) || [])[best] : null;
+  if (bestPoint) {
+    traces.push({
+      type: "scatter3d", mode: "markers+text", name: "best",
+      x: [bestPoint[0]], y: [bestPoint[1]], z: [bestPoint[2]],
+      marker: { size: 11, symbol: "diamond", color: t.best,
+                line: { color: t.surface, width: 2 } },
+      text: [` best P${String(best).padStart(2, "0")}`],
+      textposition: "top right",
+      textfont: { size: 11, color: t.secondary },
+      hovertemplate: `<b>best P${best}</b><br>${b.objective ?? "energy"} ` +
+        fmt(frame.energies[best]) + "<br>x %{x:.4f}  y %{y:.4f}  z %{z:.4f}<extra></extra>",
+      showlegend: false,
+    });
+  }
+  if (focus !== null && focus !== best) {
+    const point = (markersOf(frame) || [])[focus];
+    if (point) {
+      traces.push({
+        type: "scatter3d", mode: "markers+text", name: "focus",
+        x: [point[0]], y: [point[1]], z: [point[2]],
+        marker: { size: 9, color: t.focus, line: { color: t.surface, width: 2 } },
+        text: [` P${String(focus).padStart(2, "0")}`],
+        textposition: "bottom right",
+        textfont: { size: 11, color: t.secondary },
+        hoverinfo: "skip", showlegend: false,
+      });
+    }
+  }
+
+  // Scene anchors: neutral ink, always directly labelled.
+  if (opts.anchors) {
+    const anchor = (point, label, symbol, position) => {
+      if (!point) return;
+      traces.push({
+        type: "scatter3d", mode: "markers+text",
+        x: [point[0]], y: [point[1]], z: [point[2]],
+        marker: { size: 9, symbol, color: t.surface, line: { color: t.secondary, width: 2 } },
+        text: [` ${label}`], textposition: position,
+        textfont: { size: 11, color: t.secondary },
+        hovertemplate: `${label}<br>x %{x:.4f}  y %{y:.4f}  z %{z:.4f}<extra></extra>`,
+        showlegend: false,
+      });
+    };
+    anchor(b.start_eef, "start", "circle", "middle right");
+    anchor(b.goal_eef, b.goal_is_diagnostic_only ? "goal (diagnostic)" : "goal", "cross",
+           "top center");
+    anchor(b.target_eef, "fixed target", "x", "bottom center");
+  }
+
+  // Tracked objects (obstacle runs): where the object ended up per particle.
+  if (b.object_names && b.object_names.length && frame.object_ends) {
+    const ends = frame.object_ends.flatMap((o) => o || []);
+    const starts = (frame.object_starts[0] || []);
+    if (starts.length) {
+      traces.push({ type: "scatter3d", mode: "markers", name: "object start",
+        x: starts.map((p) => p[0]), y: starts.map((p) => p[1]), z: starts.map((p) => p[2]),
+        marker: { size: 10, symbol: "square", color: t.surface,
+                  line: { color: t.secondary, width: 2 } },
+        hovertemplate: `${b.object_names[0]} start<br>x %{x:.4f} y %{y:.4f} z %{z:.4f}<extra></extra>`,
+        showlegend: false });
+    }
+    if (ends.length) {
+      traces.push({ type: "scatter3d", mode: "markers", name: "object end",
+        x: ends.map((p) => p[0]), y: ends.map((p) => p[1]), z: ends.map((p) => p[2]),
+        marker: { size: 5, symbol: "square", color: t.muted, opacity: 0.7 },
+        hovertemplate: `${b.object_names[0]} after rollout<br>x %{x:.4f} y %{y:.4f} z %{z:.4f}<extra></extra>`,
+        showlegend: false });
+    }
+  }
+
+  // Search bounds as a wireframe box.
+  if (opts.bounds && b.bounds && b.bounds.length === 6) {
+    const [x0, x1, y0, y1, z0, z1] = b.bounds;
+    const corner = (i) => [i & 1 ? x1 : x0, i & 2 ? y1 : y0, i & 4 ? z1 : z0];
+    const edges = [[0,1],[0,2],[0,4],[1,3],[1,5],[2,3],[2,6],[3,7],[4,5],[4,6],[5,7],[6,7]];
+    const x = [], y = [], z = [];
+    for (const [a, c] of edges) {
+      const pa = corner(a), pc = corner(c);
+      x.push(pa[0], pc[0], null); y.push(pa[1], pc[1], null); z.push(pa[2], pc[2], null);
+    }
+    traces.push({ type: "scatter3d", mode: "lines", name: "search bounds",
+      x, y, z, line: { color: t.axis, width: 1, dash: "dot" },
+      hoverinfo: "skip", showlegend: false });
+  }
+  return traces;
+}
+
+function sceneLayout(t) {
+  const b = state.bundle;
+  const axis = (title, range) => ({
+    title: { text: title, font: { size: 11, color: t.muted } },
+    range,
+    backgroundcolor: t.surface,
+    gridcolor: t.grid,
+    zerolinecolor: t.axis,
+    linecolor: t.axis,
+    tickfont: { size: 10, color: t.muted },
+    showspikes: false,
+  });
+  return {
+    paper_bgcolor: t.surface,
+    plot_bgcolor: t.surface,
+    margin: { l: 0, r: 0, t: 0, b: 0 },
+    showlegend: false,
+    scene: {
+      xaxis: axis("x (m)", b.ranges[0]),
+      yaxis: axis("y (m)", b.ranges[1]),
+      zaxis: axis("z (m)", b.ranges[2]),
+      aspectmode: state.opts.equal ? "data" : "cube",
+      camera: { eye: { x: 1.5, y: 1.5, z: 0.9 } },
+    },
+    uirevision: b.key + (state.opts.equal ? "-data" : "-cube"),
+    hoverlabel: { bgcolor: t.surface, bordercolor: t.axis,
+                  font: { color: t.ink, size: 12 } },
+  };
+}
+
+// --- energy-vs-iteration strip ------------------------------------------- //
+function energyFigure(t) {
+  const b = state.bundle;
+  const iterations = b.frames.map((f) => f.iteration);
+  const mins = b.frames.map((f) => Math.min(...f.energies));
+  const maxs = b.frames.map((f) => Math.max(...f.energies));
+  const means = b.frames.map((f) => f.energies.reduce((a, c) => a + c, 0) / f.energies.length);
+  const focus = focusIndex();
+  const traces = [
+    { type: "scatter", mode: "lines", name: "population range",
+      x: iterations.concat([...iterations].reverse()),
+      y: maxs.concat([...mins].reverse()),
+      fill: "toself", fillcolor: t.dark ? "rgba(57,135,229,0.18)" : "rgba(42,120,214,0.14)",
+      line: { width: 0 }, hoverinfo: "skip" },
+    { type: "scatter", mode: "lines", name: "mean", x: iterations, y: means,
+      line: { color: t.accent, width: 2 },
+      hovertemplate: "it %{x} · mean %{y:.4f}<extra></extra>" },
+    { type: "scatter", mode: "lines", name: "best", x: iterations, y: mins,
+      line: { color: t.best, width: 2, dash: "dot" },
+      hovertemplate: "it %{x} · best %{y:.4f}<extra></extra>" },
+  ];
+  if (focus !== null) {
+    traces.push({ type: "scatter", mode: "lines", name: `P${String(focus).padStart(2, "0")}`,
+      x: iterations, y: b.frames.map((f) => f.energies[focus]),
+      line: { color: t.focus, width: 2 },
+      hovertemplate: "it %{x} · P" + focus + " %{y:.4f}<extra></extra>" });
+  }
+  const layout = {
+    paper_bgcolor: t.surface, plot_bgcolor: t.surface,
+    margin: { l: 56, r: 16, t: 22, b: 32 },
+    height: 170,
+    hovermode: "x unified",
+    xaxis: { title: { text: "iteration", font: { size: 11, color: t.muted } },
+             gridcolor: t.grid, linecolor: t.axis, zeroline: false,
+             tickfont: { size: 10, color: t.muted } },
+    yaxis: { title: { text: b.objective ?? "energy", font: { size: 11, color: t.muted } },
+             gridcolor: t.grid, linecolor: t.axis, zeroline: false,
+             tickfont: { size: 10, color: t.muted } },
+    legend: { orientation: "h", y: 1.28, x: 0, font: { size: 11, color: t.secondary } },
+    shapes: [{ type: "line", x0: b.frames[state.iter].iteration, x1: b.frames[state.iter].iteration,
+               yref: "paper", y0: 0, y1: 1, line: { color: t.muted, width: 1, dash: "dash" } }],
+    hoverlabel: { bgcolor: t.surface, bordercolor: t.axis, font: { color: t.ink, size: 12 } },
+  };
+  return { traces, layout };
+}
+
+// --- render -------------------------------------------------------------- //
+const CONFIG = { displaylogo: false, responsive: true,
+                 modeBarButtonsToRemove: ["sendDataToCloud", "toggleSpikelines"] };
+
+let stripWired = false;
+
+function render(fresh = false) {
+  if (!state.bundle) return;
+  const t = theme();
+  const method = fresh ? "newPlot" : "react";
+  Plotly[method]("scene", sceneTraces(t), sceneLayout(t), CONFIG);
+  const energy = energyFigure(t);
+  Plotly[method]("energy", energy.traces, energy.layout, CONFIG);
+  if (!stripWired && el("energy").on) {
+    stripWired = true;
+    el("energy").on("plotly_click", (event) => {   // scrub by clicking the strip
+      const index = state.bundle.frames.findIndex((f) => f.iteration === event.points[0].x);
+      if (index >= 0) { stop(); setIter(index); }
+    });
+  }
+  renderStats();
+  const frame = state.bundle.frames[state.iter];
+  el("iterLabel").textContent =
+    `iteration ${frame.iteration} / ${state.bundle.frames[state.bundle.frames.length - 1].iteration}`;
+}
+
+// --- transport ----------------------------------------------------------- //
+function setIter(value) {
+  const last = state.bundle.frames.length - 1;
+  state.iter = Math.min(last, Math.max(0, value));
+  el("slider").value = String(state.iter);
+  render();
+}
+function play() {
+  if (!state.bundle || state.playing) return;
+  state.playing = true;
+  el("play").textContent = "❚❚ Pause";
+  state.timer = setInterval(() => {
+    const last = state.bundle.frames.length - 1;
+    if (state.iter >= last) setIter(0); else setIter(state.iter + 1);
+  }, Number(el("speed").value));
+}
+function stop() {
+  state.playing = false;
+  el("play").textContent = "▶ Play";
+  if (state.timer) { clearInterval(state.timer); state.timer = null; }
+}
+const toggle = () => (state.playing ? stop() : play());
+
+// --- wiring -------------------------------------------------------------- //
+function readOptions() {
+  state.opts = {
+    paths: el("opt-paths").checked,
+    endpoints: el("opt-endpoints").checked,
+    trails: el("opt-trails").checked,
+    ghosts: el("opt-ghosts").checked,
+    anchors: el("opt-anchors").checked,
+    bounds: el("opt-bounds").checked,
+    equal: el("opt-equal").checked,
+  };
+}
+readOptions();
+
+for (const id of ["paths", "endpoints", "trails", "ghosts", "anchors", "bounds", "equal"]) {
+  el("opt-" + id).addEventListener("change", () => { readOptions(); render(); });
+}
+el("trial").addEventListener("change", (event) => loadBundle(event.target.value));
+el("focus").addEventListener("change", (event) => { state.focus = event.target.value; render(); });
+el("slider").addEventListener("input", (event) => { stop(); setIter(Number(event.target.value)); });
+el("play").addEventListener("click", toggle);
+el("prev").addEventListener("click", () => { stop(); setIter(state.iter - 1); });
+el("next").addEventListener("click", () => { stop(); setIter(state.iter + 1); });
+el("speed").addEventListener("change", () => { if (state.playing) { stop(); play(); } });
+el("ptable").addEventListener("click", (event) => {
+  const row = event.target.closest("tr");
+  if (!row) return;
+  state.focus = row.dataset.particle;
+  el("focus").value = state.focus;
+  render();
+});
+el("theme").addEventListener("click", () => {
+  const dark = getComputedStyle(document.documentElement).colorScheme.includes("dark");
+  document.documentElement.dataset.theme = dark ? "light" : "dark";
+  render(true);
+});
+document.addEventListener("keydown", (event) => {
+  if (event.target.tagName === "SELECT" || event.target.tagName === "INPUT") return;
+  if (event.key === "ArrowLeft") { stop(); setIter(state.iter - 1); }
+  else if (event.key === "ArrowRight") { stop(); setIter(state.iter + 1); }
+  else if (event.key === " ") { event.preventDefault(); toggle(); }
+});
+
+loadTrials().catch((error) => { el("title").textContent = "Failed to load: " + error; });
+</script>
+</body>
+</html>

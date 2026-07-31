@@ -321,3 +321,12 @@ preview_*.png
 
 # Repo-relative HF cache fallback (see docker/docker-compose.yml).
 .hf-cache/
+
+# Trajectory-viewer bundles (docs/svgd_trajectory_viewer.md). runs/ is ignored
+# above, so the small exported JSON is what makes a run reproducible from a
+# clone: experiments/libero/svgd_traj3d.py --runs-root viz_bundles serves these
+# with no access to history.json or the trace .npz files. Only the bundles are
+# tracked -- anything else dropped in this directory stays local.
+viz_bundles/**
+!viz_bundles/**/
+!viz_bundles/**/*.traj3d.json

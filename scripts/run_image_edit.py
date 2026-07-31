@@ -37,8 +37,13 @@ Notes
 """
 
 import argparse
+import datetime as dt
+import hashlib
+import json
 import os
+import re
 import sys
+import uuid
 from pathlib import Path
 
 import numpy as np
@@ -52,7 +57,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def load_env_local(repo_root: Path) -> dict:
-    """Parse .env.local (KEY=VALUE lines) the same way the shell wrappers do."""
+    """Parse simple KEY=VALUE and ${VAR:-default} entries from .env.local."""
     env = {}
     env_file = repo_root / ".env.local"
     if env_file.exists():
@@ -61,7 +66,18 @@ def load_env_local(repo_root: Path) -> dict:
             if not line or line.startswith("#") or "=" not in line:
                 continue
             key, val = line.split("=", 1)
-            env[key.strip()] = val.strip()
+            key = key.strip()
+            val = val.strip()
+            default_expression = re.fullmatch(
+                r"\$\{([A-Za-z_][A-Za-z0-9_]*):-([^}]*)\}",
+                val,
+            )
+            if default_expression:
+                variable_name, fallback = default_expression.groups()
+                val = os.environ.get(variable_name) or fallback
+            elif len(val) >= 2 and val[0] == val[-1] and val[0] in {"'", '"'}:
+                val = val[1:-1]
+            env[key] = val
     return env
 
 
@@ -160,6 +176,67 @@ def model_tensor_to_pil(x: torch.Tensor) -> Image.Image:
     return Image.fromarray(arr)
 
 
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def atomic_save_image(image: Image.Image, path: Path) -> None:
+    image_format = Image.registered_extensions().get(path.suffix.lower())
+    if image_format is None:
+        raise ValueError(f"Cannot infer image format from output suffix: {path}")
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        image.save(temporary, format=image_format)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def atomic_save_npy(array: np.ndarray, path: Path) -> None:
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        with temporary.open("wb") as handle:
+            np.save(handle, array)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def atomic_write_json(payload: dict, path: Path) -> None:
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        temporary.write_text(
+            json.dumps(payload, indent=2, allow_nan=False) + "\n",
+            encoding="utf-8",
+        )
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def normalize_libero_proprio(raw: np.ndarray, stats_path: Path) -> np.ndarray:
+    """Apply the checkpoint's global min/max state normalization."""
+    stats = json.loads(stats_path.read_text(encoding="utf-8"))["state"]["default"]
+    low = np.asarray(stats["global_min"], dtype=np.float32)
+    high = np.asarray(stats["global_max"], dtype=np.float32)
+    raw = np.asarray(raw, dtype=np.float32).reshape(-1)
+    if raw.shape != low.shape or raw.shape != high.shape:
+        raise ValueError(
+            f"Proprio/stats shape mismatch: raw={raw.shape}, min={low.shape}, max={high.shape}"
+        )
+    span = high - low
+    ignored = span < 1e-4
+    safe_span = span.copy()
+    safe_span[ignored] = 2.0
+    normalized = 2.0 * (raw - low) / safe_span - 1.0
+    normalized[ignored] = raw[ignored] - low[ignored]
+    return np.clip(normalized, -5.0, 5.0).astype(np.float32)
+
+
 # ----------------------------------------------------------------------------
 # Model
 # ----------------------------------------------------------------------------
@@ -217,7 +294,41 @@ def main():
     ap.add_argument("--ckpt", default=resolve("CKPT_PATH"), help="Path to model.pt.")
     ap.add_argument("--data-root", default=resolve("DATA_ROOT"),
                     help="LIBERO data root (for --from-dataset).")
+    ap.add_argument("--proprio-npy",
+                    help="Optional 8-D LIBERO proprio vector captured with the input image.")
+    ap.add_argument("--proprio-normalized", action="store_true",
+                    help="Treat --proprio-npy as already normalized for the checkpoint.")
+    ap.add_argument("--dataset-stats", default=resolve("DATASET_STATS_PATH"),
+                    help="Stats JSON used to normalize raw --proprio-npy values.")
+    ap.add_argument("--latent-output",
+                    help="Optional .npy path for the final FLUX denoising tokens.")
+    ap.add_argument("--metadata-output",
+                    help="Optional JSON path; defaults beside --output.")
     args = ap.parse_args()
+
+    if args.steps <= 0:
+        ap.error("--steps must be positive")
+    if args.height <= 0 or args.width <= 0 or args.height % 16 or args.width % 16:
+        ap.error("--height and --width must be positive multiples of 16")
+    if args.proprio_normalized and not args.proprio_npy:
+        ap.error("--proprio-normalized requires --proprio-npy")
+
+    planned_output = Path(args.output)
+    planned_paths = {
+        "output": planned_output.resolve(),
+        "comparison": planned_output.with_name(
+            planned_output.stem + "_compare.png"
+        ).resolve(),
+        "metadata": (
+            Path(args.metadata_output)
+            if args.metadata_output
+            else planned_output.with_name(planned_output.stem + "_metadata.json")
+        ).resolve(),
+    }
+    if args.latent_output:
+        planned_paths["latent"] = Path(args.latent_output).resolve()
+    if len(set(planned_paths.values())) != len(planned_paths):
+        ap.error(f"Output artifact paths must be distinct: {planned_paths}")
 
     if not args.ckpt or not Path(args.ckpt).exists():
         ap.error(f"Checkpoint not found: {args.ckpt!r}. Set CKPT_PATH or pass --ckpt.")
@@ -255,10 +366,34 @@ def main():
     model = build_model(args, device, dtype)
 
     x = pil_to_model_tensor(input_img, height=args.height, width=args.width, device=device, dtype=dtype)
-    proprio = torch.zeros(1, 8, device=device, dtype=dtype)  # placeholder robot state
+    if args.proprio_npy:
+        proprio_array = np.asarray(np.load(args.proprio_npy), dtype=np.float32).reshape(-1)
+        if proprio_array.shape != (8,):
+            ap.error(f"--proprio-npy must contain 8 values, got {proprio_array.shape}")
+        if not args.proprio_normalized:
+            if not args.dataset_stats or not Path(args.dataset_stats).exists():
+                ap.error(
+                    "Raw --proprio-npy requires --dataset-stats (or pass --proprio-normalized)."
+                )
+            proprio_array = normalize_libero_proprio(proprio_array, Path(args.dataset_stats))
+        proprio = torch.from_numpy(proprio_array).unsqueeze(0).to(device=device, dtype=dtype)
+        print(
+            f"[proprio] loaded {'normalized' if args.proprio_normalized else 'raw + normalized'} "
+            f"state from {args.proprio_npy}"
+        )
+    else:
+        proprio_array = np.zeros(8, dtype=np.float32)
+        proprio = torch.from_numpy(proprio_array).unsqueeze(0).to(device=device, dtype=dtype)
 
     # ---- Run the image-editing forward pass ----
     print("[run] predicting future frame...")
+    final_tokens = None
+
+    def capture_final_tokens(step_idx, total_steps, tokens):
+        nonlocal final_tokens
+        if step_idx == total_steps - 1:
+            final_tokens = tokens.detach().float().cpu().numpy()
+
     with torch.no_grad():
         out = model.infer_video_flux2(
             prompt=prompt,
@@ -266,11 +401,22 @@ def main():
             proprio=proprio,
             num_inference_steps=args.steps,
             seed=args.seed,
+            step_callback=capture_final_tokens if args.latent_output else None,
         )
     pred = model_tensor_to_pil(out["image"])
 
     out_path = Path(args.output)
-    pred.save(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_save_image(pred, out_path)
+
+    latent_path = None
+    if args.latent_output:
+        if final_tokens is None:
+            raise RuntimeError("Image editor did not expose final denoising tokens.")
+        latent_path = Path(args.latent_output)
+        latent_path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_save_npy(final_tokens, latent_path)
+        print(f"[done] final editor latent saved to: {latent_path}")
 
     # Also save an input|prediction strip for easy comparison.
     in_resized = center_crop_resize(input_img.convert("RGB"), width=args.width, height=args.height)
@@ -278,10 +424,69 @@ def main():
     strip.paste(in_resized, (0, 0))
     strip.paste(pred, (0, args.height))
     strip_path = out_path.with_name(out_path.stem + "_compare.png")
-    strip.save(strip_path)
+    atomic_save_image(strip, strip_path)
+
+    def file_provenance(value):
+        if not value:
+            return None
+        path = Path(value).resolve()
+        return {
+            "path": str(path),
+            "exists": path.exists(),
+            "size_bytes": path.stat().st_size if path.exists() and path.is_file() else None,
+            "mtime_ns": path.stat().st_mtime_ns if path.exists() else None,
+        }
+
+    metadata = {
+        "schema_version": 1,
+        "edit_run_id": uuid.uuid4().hex,
+        "created_at_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "input": {
+            "from_dataset": args.from_dataset,
+            "episode": args.episode if args.from_dataset else None,
+            "frame": args.frame if args.from_dataset else None,
+            "main_image": args.main_image,
+            "wrist_image": args.wrist_image,
+            "image": args.image,
+        },
+        "prompt": prompt,
+        "editor_seed": args.seed,
+        "inference_steps": args.steps,
+        "height": args.height,
+        "width": args.width,
+        "device": device,
+        "dtype": args.dtype,
+        "torch_version": torch.__version__,
+        "checkpoint": file_provenance(args.ckpt),
+        "flux2_model": file_provenance(resolve("FLUX2_MODEL_PATH")),
+        "flux2_autoencoder": file_provenance(resolve("FLUX2_AE_MODEL_PATH")),
+        "flux2_source": str(Path(FLUX2_SRC).resolve()),
+        "qwen3_model_spec": resolve("FLUX2_QWEN3_MODEL_SPEC", "Qwen/Qwen3-4B"),
+        "proprio_source": args.proprio_npy,
+        "proprio_was_normalized": bool(args.proprio_normalized),
+        "proprio_model_values": proprio_array.tolist(),
+        "dataset_stats": file_provenance(args.dataset_stats),
+        "output_image": str(out_path.resolve()),
+        "output_image_sha256": sha256_file(out_path),
+        "comparison_image": str(strip_path.resolve()),
+        "comparison_image_sha256": sha256_file(strip_path),
+        "final_latent": str(latent_path.resolve()) if latent_path is not None else None,
+        "final_latent_sha256": (
+            sha256_file(latent_path) if latent_path is not None else None
+        ),
+        "final_latent_shape": list(final_tokens.shape) if final_tokens is not None else None,
+    }
+    metadata_path = (
+        Path(args.metadata_output)
+        if args.metadata_output
+        else out_path.with_name(out_path.stem + "_metadata.json")
+    )
+    metadata_path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(metadata, metadata_path)
 
     print(f"[done] prediction saved to: {out_path}")
     print(f"[done] input|prediction comparison saved to: {strip_path}")
+    print(f"[done] editor metadata saved to: {metadata_path}")
 
 
 if __name__ == "__main__":

@@ -224,6 +224,8 @@ def main(cfg: DictConfig):
     _append_override(overrides, "tiled", cfg.EVALUATION.tiled)
     _append_override(overrides, "timing_enabled", cfg.EVALUATION.timing_enabled)
     _append_override(overrides, "robotwin_camera_layout", cfg.EVALUATION.robotwin_camera_layout)
+    _append_override(overrides, "save_model_outputs", cfg.EVALUATION.save_model_outputs)
+    _append_override(overrides, "model_output_dir", cfg.EVALUATION.model_output_dir)
     _append_override(overrides, "model_overrides", OmegaConf.to_container(cfg.model, resolve=True))
     _append_override(
         overrides,

@@ -1,0 +1,26 @@
+(define (problem LIBERO_Tabletop_Manipulation)
+  (:domain robosuite)
+  (:language move the robot arm from the left side of the empty table to the right side)
+
+  ; A region is a transparent site, not a rendered desk object. Its fixed
+  ; height is below LIBERO's `Up` threshold, so stock reward/done remain false.
+  (:regions
+    (never_success_region
+      (:target main_table)
+      (:ranges ((0.00 0.00 0.01 0.01)))
+    )
+  )
+
+  (:fixtures
+    main_table - table
+  )
+
+  (:objects)
+  (:obj_of_interest)
+  (:init)
+  (:goal
+    ; LIBERO has no robot-Cartesian-position predicate. The endpoint harness
+    ; therefore evaluates pose/orientation/gripper success numerically.
+    (And (Up main_table_never_success_region))
+  )
+)

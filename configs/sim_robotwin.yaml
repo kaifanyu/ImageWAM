@@ -34,6 +34,8 @@ EVALUATION:
   timing_enabled: false
   skip_get_obs_within_replan: true
   robotwin_camera_layout: ${data.train.robotwin_camera_layout}
+  save_model_outputs: false
+  model_output_dir: null
 
   # Runtime inputs
   dataset_stats_path: null

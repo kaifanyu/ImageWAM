@@ -1,4 +1,5 @@
 import importlib
+import json
 import logging
 import os
 import sys
@@ -217,6 +218,8 @@ class WorldActionRobotWinPolicy:
         timing_enabled: bool,
         num_video_frames: int,
         robotwin_camera_layout: str,
+        save_model_outputs: bool,
+        model_output_dir: Optional[Path],
     ) -> None:
         model_cfg_copy = OmegaConf.create(OmegaConf.to_container(model_cfg, resolve=True))
         model_cfg_copy.load_text_encoder = True
@@ -242,6 +245,11 @@ class WorldActionRobotWinPolicy:
         self.timing_enabled = bool(timing_enabled)
         self._num_video_frames = int(num_video_frames)
         self.robotwin_camera_layout = str(robotwin_camera_layout)
+        self.save_model_outputs = bool(save_model_outputs)
+        self.model_output_dir = model_output_dir
+        self._saved_model_output_count = 0
+        if self.save_model_outputs and self.model_output_dir is not None:
+            self.model_output_dir.mkdir(parents=True, exist_ok=True)
 
         self.pending_actions: deque[np.ndarray] = deque()
         self.episode_count = 0
@@ -260,12 +268,13 @@ class WorldActionRobotWinPolicy:
         }
 
         logger.info(
-            "Initialized WorldActionRobotWinPolicy | ckpt=%s | stats=%s | horizon=%d | replan=%d | robotwin_camera_layout=%s",
+            "Initialized WorldActionRobotWinPolicy | ckpt=%s | stats=%s | horizon=%d | replan=%d | robotwin_camera_layout=%s | save_model_outputs=%s",
             checkpoint_path,
             dataset_stats_path,
             self.action_horizon,
             self.replan_steps,
             self.robotwin_camera_layout,
+            self.save_model_outputs,
         )
 
     def _normalize_state(self, state: np.ndarray) -> torch.Tensor:
@@ -310,6 +319,66 @@ class WorldActionRobotWinPolicy:
         image_tensor = image_tensor * (2.0 / 255.0) - 1.0
         return image_tensor
 
+    def _tensor_image_to_pil(self, image_tensor: torch.Tensor) -> Image.Image:
+        image = image_tensor.detach().float()
+        if image.ndim == 4:
+            image = image[0]
+        if image.ndim != 3:
+            raise ValueError(f"Expected image tensor [3,H,W] or [1,3,H,W], got {tuple(image_tensor.shape)}")
+        image = ((image.clamp(-1, 1) + 1.0) * 127.5).to(torch.uint8)
+        image = image.permute(1, 2, 0).cpu().numpy()
+        return Image.fromarray(image, mode="RGB")
+
+    def _save_model_outputs(
+        self,
+        *,
+        input_image: torch.Tensor,
+        instruction: str,
+        prompt: str,
+        pred: Dict[str, Any],
+        action_chunk: np.ndarray,
+    ) -> None:
+        if not self.save_model_outputs or self.model_output_dir is None:
+            return
+
+        save_idx = self._saved_model_output_count
+        self._saved_model_output_count += 1
+        stem = f"episode_{self.episode_count:04d}_step_{self.step_count:05d}_infer_{save_idx:04d}"
+
+        input_path = self.model_output_dir / f"{stem}_input.png"
+        self._tensor_image_to_pil(input_image).save(input_path)
+
+        generated_paths: list[str] = []
+        for frame_idx, frame in enumerate(pred.get("video", []) or []):
+            frame_path = self.model_output_dir / f"{stem}_generated_{frame_idx:02d}.png"
+            if isinstance(frame, Image.Image):
+                frame.save(frame_path)
+            elif isinstance(frame, torch.Tensor):
+                self._tensor_image_to_pil(frame).save(frame_path)
+            else:
+                logger.warning("Skipping unsupported generated frame type: %s", type(frame))
+                continue
+            generated_paths.append(str(frame_path))
+
+        action_path = self.model_output_dir / f"{stem}_action.npy"
+        np.save(action_path, action_chunk)
+
+        metadata = {
+            "episode_count": int(self.episode_count),
+            "env_step_count": int(self.step_count),
+            "save_index": int(save_idx),
+            "instruction": str(instruction),
+            "prompt": str(prompt),
+            "action_horizon": int(self.action_horizon),
+            "replan_steps": int(self.replan_steps),
+            "num_inference_steps": int(self.num_inference_steps),
+            "input_image": str(input_path),
+            "generated_images": generated_paths,
+            "action": str(action_path),
+        }
+        metadata_path = self.model_output_dir / f"{stem}_metadata.json"
+        metadata_path.write_text(json.dumps(metadata, ensure_ascii=True, indent=2), encoding="utf-8")
+
     def _infer_action_chunk(self, observation: Dict[str, Any], instruction: str) -> np.ndarray:
         image_tensor = self._build_robotwin_image_tensor(observation)
         state_vector = np.asarray(observation["joint_action"]["vector"], dtype=np.float32)
@@ -337,6 +406,19 @@ class WorldActionRobotWinPolicy:
         infer_t0 = time.perf_counter() if self.timing_enabled else 0.0
         with torch.no_grad():
             pred = self.model.infer_action(**infer_kwargs)
+            if self.save_model_outputs and not pred.get("video") and hasattr(self.model, "infer_video_flux2"):
+                video_out = self.model.infer_video_flux2(
+                    prompt=prompt,
+                    input_image=image_tensor,
+                    proprio=proprio,
+                    num_inference_steps=self.num_inference_steps,
+                    sigma_shift=self.sigma_shift,
+                    seed=self.seed,
+                    rand_device=self.rand_device,
+                )
+                image = video_out["image"].detach().float().clamp(-1, 1)
+                image = ((image + 1.0) * 127.5).to(torch.uint8).permute(1, 2, 0).cpu().numpy()
+                pred["video"] = [Image.fromarray(image)]
         if self.timing_enabled:
             infer_s = time.perf_counter() - infer_t0
             self._timing_rollout["infer_s"] += infer_s
@@ -346,6 +428,13 @@ class WorldActionRobotWinPolicy:
 
         action_tensor = pred["action"]  # [T, D]
         action_chunk = self._denormalize_action(action_tensor)[0]  # [T, D]
+        self._save_model_outputs(
+            input_image=image_tensor,
+            instruction=instruction,
+            prompt=prompt,
+            pred=pred,
+            action_chunk=action_chunk,
+        )
         return action_chunk
 
     def _fill_action_queue(self, observation: Dict[str, Any], instruction: str) -> None:
@@ -586,6 +675,20 @@ def get_model(usr_args: Dict[str, Any]):
             ),
         )
     )
+    save_model_outputs = _parse_bool(
+        usr_args.get("save_model_outputs", cfg.EVALUATION.get("save_model_outputs", False))
+    )
+    model_output_dir_value = usr_args.get("model_output_dir", cfg.EVALUATION.get("model_output_dir", None))
+    if _is_none_like(model_output_dir_value) and save_model_outputs:
+        eval_output_dir = usr_args.get("eval_output_dir")
+        if not _is_none_like(eval_output_dir):
+            model_output_dir_value = Path(str(eval_output_dir)) / "model_outputs"
+
+    model_output_dir: Path | None = None
+    if not _is_none_like(model_output_dir_value):
+        model_output_dir = Path(str(model_output_dir_value)).expanduser()
+        if not model_output_dir.is_absolute():
+            model_output_dir = (PROJECT_ROOT / model_output_dir).resolve()
 
     policy = WorldActionRobotWinPolicy(
         model_cfg=cfg.model,
@@ -606,6 +709,8 @@ def get_model(usr_args: Dict[str, Any]):
         timing_enabled=timing_enabled,
         num_video_frames=(int(cfg.data.train.num_frames) - 1) // int(cfg.data.train.action_video_freq_ratio) + 1,
         robotwin_camera_layout=robotwin_camera_layout,
+        save_model_outputs=save_model_outputs,
+        model_output_dir=model_output_dir,
     )
     return policy
 

@@ -25,3 +25,5 @@ tiled: false
 timing_enabled: false
 skip_get_obs_within_replan: false
 robotwin_camera_layout: compact_288x256
+save_model_outputs: false
+model_output_dir: null

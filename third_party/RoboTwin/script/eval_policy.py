@@ -2,6 +2,7 @@ import sys
 import os
 import subprocess
 import json
+import shutil
 
 sys.path.append("./")
 sys.path.append(f"./policy")
@@ -154,6 +155,22 @@ def _append_episode_end_state(path, record):
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(record, ensure_ascii=True) + "\n")
+
+
+def _resolve_ffmpeg_exe():
+    ffmpeg_exe = shutil.which("ffmpeg")
+    if ffmpeg_exe is not None:
+        return ffmpeg_exe
+
+    try:
+        import imageio_ffmpeg
+
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception as exc:
+        raise FileNotFoundError(
+            "ffmpeg executable not found on PATH, and imageio-ffmpeg fallback is unavailable. "
+            "Install ffmpeg or `uv pip install imageio-ffmpeg` in the RoboTwin worker env."
+        ) from exc
 
 
 def main(usr_args):
@@ -393,7 +410,7 @@ def eval_policy(task_name,
             current_video_path = Path(TASK_ENV.eval_video_path) / f"episode{episode_idx}.mp4"
             ffmpeg = subprocess.Popen(
                 [
-                    "ffmpeg",
+                    _resolve_ffmpeg_exe(),
                     "-y",
                     "-loglevel",
                     "error",
