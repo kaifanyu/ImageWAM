@@ -1,0 +1,40 @@
+(define (problem LIBERO_Tabletop_Manipulation)
+  (:domain robosuite)
+  (:language push the cream cheese box from the back of the table toward the front while keeping it upright)
+
+  (:regions
+    ; One compact, high-contrast object in an otherwise empty scene.  The
+    ; experiment harness measures the object's terminal pose numerically; the
+    ; stock BDDL goal is intentionally unreachable so reward/done cannot leak
+    ; the answer into goal-image-only optimization.
+    (box_init_region
+      (:target main_table)
+      (:ranges ((-0.052 -0.002 -0.048 0.002)))
+      (:yaw_rotation ((0.0 0.0)))
+    )
+    (never_success_region
+      (:target main_table)
+      (:ranges ((0.00 0.30 0.01 0.31)))
+    )
+  )
+
+  (:fixtures
+    main_table - table
+  )
+
+  (:objects
+    cream_cheese_1 - cream_cheese
+  )
+
+  (:obj_of_interest
+    cream_cheese_1
+  )
+
+  (:init
+    (On cream_cheese_1 main_table_box_init_region)
+  )
+
+  (:goal
+    (And (Up main_table_never_success_region))
+  )
+)
