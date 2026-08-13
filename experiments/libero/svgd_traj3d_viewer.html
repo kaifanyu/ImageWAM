@@ -5,10 +5,15 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>SVGD trajectory evolution — 3D</title>
 <style>
-  /* Palette roles: sequential blue ramp = objective energy (magnitude),
-     orange = the focused particle, aqua = the best particle of the iteration,
-     neutral ink = scene anchors (start / goal / bounds). Light and dark are
-     separately stepped, not flipped. */
+  /* Palette roles:
+       sequential blue ramp = objective energy (magnitude, unselected particles);
+       orange / aqua / violet = identity of the selected particles (max 3 --
+         that trio is the largest set that clears the all-pairs CVD and
+         normal-vision floors in both modes, and each is direct-labelled too);
+       neutral ink = anchors and rankings (start, goal, best, global best) --
+         carried by shape and label, never by hue alone;
+       muted neutral = scene landmarks (table, robot base, objects).
+     Light and dark are separately stepped, not flipped. */
   :root {
     color-scheme: light;
     --surface-1: #fcfcfb;
@@ -19,11 +24,14 @@
     --grid: #e1e0d9;
     --axis: #c3c2b7;
     --border: rgba(11, 11, 11, 0.10);
-    --focus: #eb6834;
-    --best: #1baf7a;
+    --series-1: #eb6834;
+    --series-2: #1baf7a;
+    --series-3: #4a3aa7;
     --accent: #2a78d6;
     --accent-soft: rgba(42, 120, 214, 0.16);
     --hover: rgba(11, 11, 11, 0.05);
+    --good: #1baf7a;
+    --warn: #eda100;
   }
   @media (prefers-color-scheme: dark) {
     :root:where(:not([data-theme="light"])) {
@@ -36,11 +44,14 @@
       --grid: #2c2c2a;
       --axis: #383835;
       --border: rgba(255, 255, 255, 0.10);
-      --focus: #d95926;
-      --best: #199e70;
+      --series-1: #d95926;
+      --series-2: #199e70;
+      --series-3: #9085e9;
       --accent: #3987e5;
       --accent-soft: rgba(57, 135, 229, 0.20);
       --hover: rgba(255, 255, 255, 0.06);
+      --good: #199e70;
+      --warn: #c98500;
     }
   }
   :root[data-theme="dark"] {
@@ -53,18 +64,21 @@
     --grid: #2c2c2a;
     --axis: #383835;
     --border: rgba(255, 255, 255, 0.10);
-    --focus: #d95926;
-    --best: #199e70;
+    --series-1: #d95926;
+    --series-2: #199e70;
+    --series-3: #9085e9;
     --accent: #3987e5;
     --accent-soft: rgba(57, 135, 229, 0.20);
     --hover: rgba(255, 255, 255, 0.06);
+    --good: #199e70;
+    --warn: #c98500;
   }
 
   * { box-sizing: border-box; }
   html, body { height: 100%; margin: 0; }
   body {
     display: grid;
-    grid-template-columns: 320px minmax(0, 1fr);
+    grid-template-columns: 340px minmax(0, 1fr);
     font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
     background: var(--surface-2);
     color: var(--text-primary);
@@ -102,13 +116,27 @@
   button { cursor: pointer; }
   button:hover { background: var(--hover); }
   button.primary { background: var(--accent-soft); border-color: transparent; }
+  button.mini { padding: 2px 7px; font-size: 11px; }
   .checks { display: grid; gap: 6px; }
   .checks label { display: flex; align-items: center; gap: 8px; color: var(--text-secondary); }
   .checks input { accent-color: var(--accent); }
+  .checks label.off { color: var(--text-muted); opacity: 0.55; }
+
+  .picks { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-height: 26px; }
+  .pick {
+    display: inline-flex; align-items: center; gap: 6px;
+    border: 1px solid var(--border); border-radius: 999px;
+    padding: 2px 6px 2px 8px; font-variant-numeric: tabular-nums;
+  }
+  .pick b { font-weight: 600; }
+  .pick button { border: 0; background: none; padding: 0 2px; color: var(--text-muted); }
+  .empty { color: var(--text-muted); font-size: 11px; }
 
   .stats { display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; }
   .stats dt { color: var(--text-secondary); margin: 0; }
   .stats dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+  .stats dd.ok { color: var(--good); }
+  .stats dd.warn { color: var(--warn); }
 
   table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
   th, td { padding: 3px 4px; text-align: right; }
@@ -116,13 +144,11 @@
   th:first-child, td:first-child { text-align: left; }
   tbody tr { cursor: pointer; border-top: 1px solid var(--border); }
   tbody tr:hover { background: var(--hover); }
-  tbody tr.is-focus td:first-child { box-shadow: inset 3px 0 0 var(--focus); }
-  tbody tr.is-best td:first-child { box-shadow: inset 3px 0 0 var(--best); }
-  tbody tr.is-focus.is-best td:first-child { box-shadow: inset 3px 0 0 var(--focus), inset 6px 0 0 var(--best); }
+  tbody tr.is-picked { background: var(--hover); }
   details summary { cursor: pointer; color: var(--text-muted); font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 8px; }
 
   /* ---------- main ---------- */
-  main { display: grid; grid-template-rows: auto minmax(0, 1fr) 170px auto; min-width: 0; }
+  main { display: grid; grid-template-rows: auto minmax(0, 1fr) auto 176px auto; min-width: 0; }
   header {
     display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
     padding: 10px 16px; border-bottom: 1px solid var(--border); background: var(--surface-1);
@@ -131,20 +157,59 @@
   .chip {
     font-size: 11px; color: var(--text-secondary);
     background: var(--surface-2); border: 1px solid var(--border);
-    border-radius: 999px; padding: 2px 8px;
+    border-radius: 999px; padding: 2px 8px; white-space: nowrap;
   }
+  .chip.flag { border-color: var(--warn); color: var(--text-primary); }
   .spacer { margin-left: auto; }
   #scene { min-height: 0; }
-  #energy { border-top: 1px solid var(--border); }
+  #strip { border-top: 1px solid var(--border); }
   footer {
-    display: flex; align-items: center; gap: 12px;
-    padding: 10px 16px; border-top: 1px solid var(--border); background: var(--surface-1);
+    display: grid; gap: 6px;
+    padding: 8px 16px 10px; border-top: 1px solid var(--border); background: var(--surface-1);
   }
-  footer input[type="range"] { flex: 1; accent-color: var(--accent); }
-  .iter-label { font-variant-numeric: tabular-nums; color: var(--text-secondary); min-width: 128px; }
+  .transport { display: flex; align-items: center; gap: 10px; }
+  .transport input[type="range"] { flex: 1; accent-color: var(--accent); }
+  .transport .lead { min-width: 74px; color: var(--text-muted); font-size: 11px;
+    text-transform: uppercase; letter-spacing: 0.06em; }
+  .read { font-variant-numeric: tabular-nums; color: var(--text-secondary); min-width: 150px; text-align: right; }
   .hint { color: var(--text-muted); font-size: 11px; }
-  .msg { padding: 24px; color: var(--text-secondary); }
+  .group-title .hint { text-transform: none; letter-spacing: 0; font-size: 10px; }
   .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; vertical-align: -1px; margin-right: 4px; }
+  .swatch.hollow { background: none; border: 2px solid var(--text-secondary); }
+
+  /* ---------- terminal renders ---------- */
+  /* The frames the objective was actually computed on, next to the goal they
+     were scored against -- the panel answers "what did this number look like". */
+  /* Kept deliberately short: this row steals its height from the 3D scene. */
+  #renders {
+    display: flex; gap: 10px; align-items: flex-start;
+    margin: 0; padding: 6px 16px 8px; border-top: 1px solid var(--border);
+    background: var(--surface-1); overflow-x: auto;
+  }
+  #renders:empty { display: none; padding: 0; border: 0; }
+  .render { flex: 0 0 auto; margin: 0; }
+  .render figcaption {
+    display: flex; align-items: baseline; gap: 6px; white-space: nowrap;
+    font-size: 11px; color: var(--text-secondary); margin: 0 0 3px;
+    font-variant-numeric: tabular-nums;
+  }
+  .render figcaption .num { color: var(--text-muted); }
+  .render .frame {
+    display: block; overflow: hidden; border: 1px solid var(--border);
+    border-radius: 6px; background: var(--surface-2); line-height: 0;
+    width: var(--tile); height: calc(var(--tile) / 2);
+  }
+  .render.is-goal .frame { border-color: var(--text-secondary); }
+  .render img { height: calc(var(--tile) / 2); display: block; }
+  /* The render is one [agentview | wrist] strip; a single view crops to a half
+     and slides the strip, so no second request is needed. */
+  #renders { --tile: 208px; }
+  .render.view-agentview .frame, .render.view-wrist .frame { width: calc(var(--tile) / 2); }
+  .render.view-wrist img { margin-left: calc(var(--tile) / -2); }
+  .render .miss {
+    height: 100%; display: grid; place-items: center;
+    color: var(--text-muted); font-size: 11px; line-height: 1.4;
+  }
 </style>
 </head>
 <body>
@@ -163,23 +228,82 @@
   </div>
 
   <div class="group">
-    <label for="focus">Show</label>
-    <select id="focus"></select>
+    <label for="mode">Show</label>
+    <select id="mode">
+      <option value="all">All particles</option>
+      <option value="best">Best particle of each iteration</option>
+      <option value="gbest">Global best particle</option>
+    </select>
+    <div class="checks" style="margin-top:6px">
+      <label><input type="checkbox" id="opt-solo"> Show only the picked particles</label>
+    </div>
   </div>
 
   <div class="group">
-    <span class="group-title">Layers</span>
+    <span class="group-title">Picked particles <span class="hint">click a path or a row</span></span>
+    <div class="picks" id="picks"></div>
+  </div>
+
+  <div class="group">
+    <span class="group-title">Rollout layers</span>
     <div class="checks">
       <label><input type="checkbox" id="opt-paths" checked> Rollout paths</label>
+      <label><input type="checkbox" id="opt-direction" checked> Direction arrows + time bead</label>
+      <label><input type="checkbox" id="opt-reveal"> Draw path only up to the current step</label>
       <label><input type="checkbox" id="opt-endpoints" checked> <span id="lbl-endpoints">Endpoints</span></label>
       <label><input type="checkbox" id="opt-trails" checked> <span id="lbl-trails">Endpoint trails</span> (iterations so far)</label>
       <label><input type="checkbox" id="opt-ghosts"> Ghost paths (5 previous iterations)</label>
-      <label><input type="checkbox" id="opt-anchors" checked> Start / goal anchors</label>
-      <label><input type="checkbox" id="opt-bounds" checked> Search bounds box</label>
-      <label><input type="checkbox" id="opt-equal"> True proportions (equal axes)</label>
+      <label id="lab-arm"><input type="checkbox" id="opt-arm"> Arm skeleton at the current step</label>
     </div>
-    <p class="hint" style="margin:6px 0 0">Axes are stretched to a cube by default —
-      x spans centimetres where y spans tens. Tick above for metric proportions.</p>
+  </div>
+
+  <div class="group">
+    <span class="group-title">Scene layers</span>
+    <div class="checks">
+      <label><input type="checkbox" id="opt-anchors" checked> Start / goal / target anchors</label>
+      <label><input type="checkbox" id="opt-goalring" checked> Goal tolerance ring + residual</label>
+      <label id="lab-landmarks"><input type="checkbox" id="opt-landmarks" checked> Table, robot base</label>
+      <label id="lab-objects"><input type="checkbox" id="opt-objects" checked> Objects and their motion</label>
+      <label><input type="checkbox" id="opt-bounds"> Search bounds box</label>
+    </div>
+  </div>
+
+  <div class="group">
+    <label for="framing">Framing</label>
+    <select id="framing">
+      <option value="scene">Fit particles, goal and objects</option>
+      <option value="particles">Fit particles only (zoom in)</option>
+      <option value="landmarks">Fit table, robot base and arm</option>
+      <option value="bounds">Fit everything incl. search bounds</option>
+    </select>
+    <label for="proportions" style="margin-top:10px">Proportions</label>
+    <select id="proportions">
+      <option value="true" selected>True — 1 m of x = 1 m of y = 1 m of z</option>
+      <option value="floor">True, but thin axes floored</option>
+      <option value="cube">Stretch every axis to a cube</option>
+    </select>
+    <p class="hint" id="proportionNote" style="margin:6px 0 0"></p>
+  </div>
+
+  <div class="group">
+    <span class="group-title">Terminal renders</span>
+    <div class="checks">
+      <label id="lab-renders"><input type="checkbox" id="opt-renders" checked>
+        Show the images each particle produced</label>
+    </div>
+    <select id="renderView" style="margin-top:6px">
+      <option value="both">Both views (agentview | wrist)</option>
+      <option value="agentview">Agentview only</option>
+      <option value="wrist">Wrist only</option>
+    </select>
+    <p class="hint" style="margin:6px 0 0">Shows the picked particles at the
+      current iteration beside the goal they are scored against. Click one to
+      open it full size.</p>
+  </div>
+
+  <div class="group">
+    <span class="group-title">Scene check</span>
+    <dl class="stats" id="verify"></dl>
   </div>
 
   <div class="group">
@@ -203,22 +327,40 @@
     <h2 id="title">Loading…</h2>
     <span id="chips"></span>
     <span class="spacer"></span>
-    <span class="hint">← → step · space play</span>
+    <span class="hint">← → iteration · shift ← → step · space play</span>
   </header>
   <div id="scene"></div>
-  <div id="energy"></div>
+  <div id="renders"></div>
+  <div id="strip"></div>
   <footer>
-    <button id="play" class="primary">▶ Play</button>
-    <button id="prev">◀</button>
-    <button id="next">▶</button>
-    <input type="range" id="slider" min="0" max="0" value="0" />
-    <span class="iter-label" id="iterLabel">iteration 0</span>
-    <select id="speed" style="width:auto">
-      <option value="700">0.5×</option>
-      <option value="350" selected>1×</option>
-      <option value="150">2×</option>
-      <option value="60">4×</option>
-    </select>
+    <div class="transport">
+      <span class="lead">Iteration</span>
+      <button id="play" class="primary">▶ Play</button>
+      <button id="prev">◀</button>
+      <button id="next">▶</button>
+      <input type="range" id="slider" min="0" max="0" value="0" />
+      <span class="read" id="iterLabel">iteration 0</span>
+      <select id="speed" style="width:auto">
+        <option value="700">0.5×</option>
+        <option value="350" selected>1×</option>
+        <option value="150">2×</option>
+        <option value="60">4×</option>
+      </select>
+    </div>
+    <div class="transport">
+      <span class="lead">Rollout</span>
+      <button id="playStep">▶ Play</button>
+      <button id="prevStep">◀</button>
+      <button id="nextStep">▶</button>
+      <input type="range" id="stepSlider" min="0" max="0" value="0" />
+      <span class="read" id="stepLabel">step —</span>
+      <select id="stripMetric" style="width:auto">
+        <option value="energy">strip: energy</option>
+        <option value="goal">strip: goal error</option>
+        <option value="tracking">strip: tracking error</option>
+        <option value="spread">strip: particle spread</option>
+      </select>
+    </div>
   </footer>
 </main>
 
@@ -238,6 +380,9 @@ const RAMP_LIGHT = ["#0d366b","#104281","#184f95","#1c5cab","#256abf","#2a78d6",
                     "#3987e5","#5598e7","#6da7ec","#86b6ef","#9ec5f4"];
 const RAMP_DARK  = ["#cde2fb","#b7d3f6","#9ec5f4","#86b6ef","#6da7ec","#5598e7",
                     "#3987e5","#2a78d6","#256abf","#1c5cab","#184f95"];
+// Three is the cap by construction, not by taste: orange/aqua/violet is the
+// largest set that clears the all-pairs CVD floor in both modes.
+const MAX_PICKS = 3;
 
 function theme() {
   const css = getComputedStyle(document.documentElement);
@@ -251,13 +396,15 @@ function theme() {
     muted: v("--text-muted"),
     grid: v("--grid"),
     axis: v("--axis"),
-    focus: v("--focus"),
-    best: v("--best"),
     accent: v("--accent"),
+    good: v("--good"),
+    warn: v("--warn"),
+    series: [v("--series-1"), v("--series-2"), v("--series-3")],
     ramp: dark ? RAMP_DARK : RAMP_LIGHT,
   };
 }
 const colorscale = (ramp) => ramp.map((c, i) => [i / (ramp.length - 1), c]);
+const solidscale = (color) => [[0, color], [1, color]];
 function rampColor(ramp, t) {
   if (!isFinite(t)) return ramp[Math.floor(ramp.length / 2)];
   const i = Math.round(Math.min(1, Math.max(0, t)) * (ramp.length - 1));
@@ -269,17 +416,28 @@ const state = {
   trials: [],
   bundle: null,
   iter: 0,
-  focus: "all",           // "all" | "best" | "gbest" | particle index
-  playing: false,
+  step: 0,               // index into the sampled rollout waypoints
+  mode: "all",           // "all" | "best" | "gbest" -- what the run itself highlights
+  picks: [],             // particle indices, most recent last, capped at MAX_PICKS
+  playing: null,         // null | "iter" | "step"
   timer: null,
   opts: {},
 };
 const el = (id) => document.getElementById(id);
+// Markup is the source of truth for which layers start on.
+const LAYER_DEFAULTS = Object.fromEntries(
+  ["opt-arm", "opt-landmarks", "opt-objects", "opt-renders"]
+    .map((id) => [id, document.getElementById(id).checked]));
 // Endpoint runs move their target endpoint; path runs share one fixed endpoint
 // and move the arc instead, so the per-particle marker is the path apex.
 const markersOf = (frame) => frame.markers || frame.targets;
 const fmt = (x, n = 4) => (x == null || !isFinite(x) ? "—" : Number(x).toFixed(n));
+const mm = (x) => (x == null || !isFinite(x) ? "—" : `${(x * 1000).toFixed(1)} mm`);
 const xyz = (p, n = 3) => (p ? `(${p.map((v) => v.toFixed(n)).join(", ")})` : "—");
+const pad = (p) => `P${String(p).padStart(2, "0")}`;
+const frameNow = () => state.bundle.frames[state.iter];
+const distance = (a, b) =>
+  a && b ? Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]) : null;
 
 // --- data loading -------------------------------------------------------- //
 async function loadTrials() {
@@ -322,50 +480,173 @@ async function loadBundle(key) {
   const energies = bundle.frames.flatMap((f) => f.energies).filter(isFinite);
   bundle.eMin = Math.min(...energies);
   bundle.eMax = Math.max(...energies);
-  const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
-  const extend = (point) => {
-    if (!point) return;
-    for (let k = 0; k < 3; k++) {
-      if (!isFinite(point[k])) continue;
-      lo[k] = Math.min(lo[k], point[k]);
-      hi[k] = Math.max(hi[k], point[k]);
-    }
-  };
-  for (const frame of bundle.frames) {
-    (frame.paths || []).forEach((path) => path && path.forEach(extend));
-    (markersOf(frame) || []).forEach(extend);
-    (frame.object_starts || []).forEach((o) => o && o.forEach(extend));
-    (frame.object_ends || []).forEach((o) => o && o.forEach(extend));
-  }
-  // Anchors count toward the framing; the search-bounds box deliberately does
-  // not -- it is usually far larger than the region the particles ever visit.
-  extend(bundle.start_eef); extend(bundle.goal_eef); extend(bundle.target_eef);
-  bundle.ranges = [0, 1, 2].map((k) => {
-    const pad = Math.max((hi[k] - lo[k]) * 0.08, 0.004);
-    return [lo[k] - pad, hi[k] + pad];
-  });
+  bundle.rollout = bundle.rollout || {};
+  bundle.waypoints = Math.max(
+    ...bundle.frames.flatMap((f) => (f.paths || []).map((p) => (p ? p.length : 0))), 1);
+  bundle.armFrames = Math.max(
+    ...bundle.frames.flatMap((f) => (f.arms || []).map((a) => (a ? a.length : 0))), 0);
+  bundle.hasObjects = bundle.frames.some((f) => f.object_paths || f.object_starts);
+  bundle.hasScene = !!(bundle.scene && (bundle.scene.table || bundle.scene.robot_base));
 
   state.bundle = bundle;
   state.iter = 0;
-  state.focus = "all";
-  buildFocusOptions();
+  state.step = bundle.waypoints - 1;   // the terminal pose is the interesting one
+  state.mode = "all";
+  state.picks = [];
+  el("mode").value = "all";
+  measure();
   el("slider").max = String(bundle.frames.length - 1);
   el("slider").value = "0";
+  el("stepSlider").max = String(bundle.waypoints - 1);
+  el("stepSlider").value = String(state.step);
+  toggleAvailability();
   renderHeader();
   render(true);
 }
 
-function buildFocusOptions() {
-  const select = el("focus");
-  select.innerHTML = "";
-  const add = (value, text) => select.add(new Option(text, value));
-  add("all", "All particles");
-  add("best", "Best particle of each iteration");
-  add("gbest", "Global best particle");
-  for (let p = 0; p < state.bundle.particles; p++) {
-    add(String(p), `Particle ${String(p).padStart(2, "0")}`);
+// Availability of a layer is a property of the run, not of the user: grey out
+// what this run simply did not record instead of offering a dead switch.
+function toggleAvailability() {
+  const b = state.bundle;
+  const set = (labelId, boxId, available, missing) => {
+    const label = el(labelId), box = el(boxId);
+    const wasUnavailable = box.disabled;
+    box.disabled = !available;
+    label.classList.toggle("off", !available);
+    label.title = available ? "" : missing;
+    // Coming back to a run that has the layer restores its default rather than
+    // leaving it silently off because some earlier run lacked the data.
+    if (!available) box.checked = false;
+    else if (wasUnavailable) box.checked = LAYER_DEFAULTS[boxId];
+  };
+  set("lab-arm", "opt-arm", b.armFrames > 0,
+      "This run has no arm-link logging — re-run with the current scene_geometry capture.");
+  set("lab-landmarks", "opt-landmarks", b.hasScene,
+      "No scene.json next to this run — landmarks were not captured.");
+  set("lab-objects", "opt-objects", b.hasObjects, "This scene has no tracked objects.");
+  set("lab-renders", "opt-renders", !!b.images_available,
+      "Terminal renders live next to the run; an exported bundle carries only "
+      + "the numbers, so serve --runs-root from the run directory to see them.");
+  readOptions();
+}
+
+// --- framing ------------------------------------------------------------- //
+// Four nested extents: the particles alone (millimetres, in the runs where the
+// population barely moves), plus the goal and objects, plus the room (table,
+// robot base, arm -- tens of centimetres), plus the search bounds.
+function measure() {
+  const b = state.bundle;
+  const box = () => ({ lo: [Infinity, Infinity, Infinity], hi: [-Infinity, -Infinity, -Infinity] });
+  const grow = (target, point) => {
+    if (!point) return;
+    for (let k = 0; k < 3; k++) {
+      if (!isFinite(point[k])) continue;
+      target.lo[k] = Math.min(target.lo[k], point[k]);
+      target.hi[k] = Math.max(target.hi[k], point[k]);
+    }
+  };
+  const particles = box(), scene = box(), landmarks = box(), bounds = box();
+  const inherit = (target, source) => {
+    target.lo = source.lo.slice();
+    target.hi = source.hi.slice();
+  };
+  for (const frame of b.frames) {
+    (frame.paths || []).forEach((path) => path && path.forEach((p) => grow(particles, p)));
+    (markersOf(frame) || []).forEach((p) => grow(particles, p));
   }
-  select.value = "all";
+  inherit(scene, particles);
+  grow(scene, b.start_eef); grow(scene, b.goal_eef); grow(scene, b.target_eef);
+  for (const frame of b.frames) {
+    for (const perParticle of frame.object_paths || []) {
+      (perParticle || []).forEach((track) => (track || []).forEach((p) => grow(scene, p)));
+    }
+    (frame.object_starts || []).forEach((o) => (o || []).forEach((p) => grow(scene, p)));
+    (frame.object_ends || []).forEach((o) => (o || []).forEach((p) => grow(scene, p)));
+  }
+  inherit(landmarks, scene);
+  const table = b.scene && b.scene.table;
+  if (table) {
+    for (const sx of [-1, 1]) {
+      for (const sy of [-1, 1]) {
+        grow(landmarks, [table.center[0] + sx * table.half_extents[0],
+                         table.center[1] + sy * table.half_extents[1], table.top_z]);
+      }
+    }
+  }
+  if (b.scene && b.scene.robot_base) grow(landmarks, b.scene.robot_base.position);
+  // The arm reaches back to its base, so a run with arm poses frames wider still.
+  for (const frame of b.frames) {
+    for (const arm of frame.arms || []) {
+      (arm || []).forEach((pose) => pose.forEach((joint) => grow(landmarks, joint)));
+    }
+  }
+  inherit(bounds, landmarks);
+  if (b.bounds && b.bounds.length === 6) {
+    grow(bounds, [b.bounds[0], b.bounds[2], b.bounds[4]]);
+    grow(bounds, [b.bounds[1], b.bounds[3], b.bounds[5]]);
+  }
+  const pack = (target) => [0, 1, 2].map((k) => {
+    const pad = Math.max((target.hi[k] - target.lo[k]) * 0.08, 0.004);
+    return [target.lo[k] - pad, target.hi[k] + pad];
+  });
+  b.framing = { particles: pack(particles), scene: pack(scene),
+                landmarks: pack(landmarks), bounds: pack(bounds) };
+}
+const ranges = () => state.bundle.framing[state.opts.framing] || state.bundle.framing.scene;
+
+// --- selection ----------------------------------------------------------- //
+function picked() {
+  const frame = frameNow();
+  if (state.mode === "best") {
+    const best = frame.best_particle;
+    return best == null ? [] : [best];
+  }
+  if (state.mode === "gbest") {
+    const best = frame.global_best_particle;
+    return best == null ? [] : [best];
+  }
+  return state.picks;
+}
+const pickColor = (t, index) => t.series[index % t.series.length];
+function colorOf(t, particle) {
+  const index = picked().indexOf(particle);
+  if (index >= 0) return pickColor(t, index);
+  const b = state.bundle, energy = frameNow().energies[particle];
+  return rampColor(t.ramp, (energy - b.eMin) / Math.max(b.eMax - b.eMin, 1e-9));
+}
+
+function pick(particle, additive) {
+  // Picking in "best"/"global best" mode would otherwise look like a dead
+  // click: those modes derive their own selection. Hand control back.
+  if (state.mode === "best" || state.mode === "gbest") {
+    state.mode = "all";
+    el("mode").value = "all";
+  }
+  const at = state.picks.indexOf(particle);
+  if (at >= 0 && (additive || state.picks.length === 1)) state.picks.splice(at, 1);
+  else if (additive) {
+    if (at < 0) state.picks.push(particle);
+    while (state.picks.length > MAX_PICKS) state.picks.shift();
+  } else state.picks = [particle];
+  renderPicks();
+  render();
+}
+
+function renderPicks() {
+  const t = theme(), list = picked();
+  const container = el("picks");
+  if (!list.length) {
+    container.innerHTML =
+      `<span class="empty">none — showing the whole population</span>`;
+    return;
+  }
+  container.innerHTML = list.map((particle, index) =>
+    `<span class="pick"><span class="swatch" style="background:${pickColor(t, index)}"></span>` +
+    `<b>${pad(particle)}</b>` +
+    (state.picks.includes(particle)
+      ? `<button data-drop="${particle}" title="Remove">×</button>` : "") +
+    `</span>`).join("") +
+    (state.picks.length > 1 ? `<button class="mini" id="clearPicks">clear</button>` : "");
 }
 
 // --- header / stats ------------------------------------------------------ //
@@ -388,107 +669,490 @@ function renderHeader() {
   ];
   if (b.config.transport) chips.push(b.config.transport);
   if (b.config.step_size != null) chips.push(`step ${b.config.step_size}`);
-  el("chips").innerHTML = chips.map((c) => `<span class="chip">${c}</span>`).join(" ");
+  const checks = b.checks || {};
+  const flags = [];
+  if (b.goal_is_diagnostic_only) flags.push("goal is diagnostic only — not optimised for");
+  if (checks.goal_reachable_by_particles === false) {
+    flags.push(`best terminal is ${(checks.goal_vs_best_terminal_m * 100).toFixed(1)} cm from the goal`);
+  }
+  if (!b.hasScene) flags.push("no scene.json — no landmarks");
+  el("chips").innerHTML =
+    chips.map((c) => `<span class="chip">${c}</span>`).join(" ") +
+    flags.map((c) => ` <span class="chip flag">⚑ ${c}</span>`).join("");
   el("th-energy").textContent = b.objective ?? "energy";
 }
 
+// Distances that decide whether the plot means what it looks like it means.
+function renderVerify() {
+  const b = state.bundle, checks = b.checks || {};
+  const row = (label, value, ok) =>
+    [label, value, ok === undefined ? "" : ok ? "ok" : "warn"];
+  const rows = [
+    row("start vs path[0]", mm(checks.start_vs_first_waypoint_m),
+        checks.start_vs_first_waypoint_m != null && checks.start_vs_first_waypoint_m < 0.002),
+    row("target vs terminal (worst)", mm(checks.target_tracking_max_m),
+        checks.target_tracking_max_m != null && checks.target_tracking_max_m < 0.05),
+    row("goal vs best terminal", mm(checks.goal_vs_best_terminal_m),
+        checks.goal_reachable_by_particles === true),
+    row("goal from " + (b.kind === "path" ? "fixed target" : "start"),
+        mm(distance(b.goal_eef, b.kind === "path" ? b.target_eef : b.start_eef))),
+    row("population span", mm(checks.particle_span_m)),
+    row("goal source", checks.goal_source ?? "—"),
+  ];
+  if (b.scene && b.scene.table) rows.push(row("table top z", fmt(b.scene.table.top_z, 3) + " m"));
+  el("verify").innerHTML = rows.map(([k, v, cls]) =>
+    `<dt>${k}</dt><dd class="${cls}">${v}</dd>`).join("");
+}
+
 function renderStats() {
-  const b = state.bundle, frame = b.frames[state.iter];
+  const b = state.bundle, frame = frameNow();
   const energies = frame.energies;
   const mean = energies.reduce((a, c) => a + c, 0) / energies.length;
   const best = frame.best_particle ?? energies.indexOf(Math.min(...energies));
   const rows = [
-    [`<span class="swatch" style="background:var(--best)"></span>best particle`,
-      `P${String(best).padStart(2, "0")}`],
+    [`<span class="swatch hollow"></span>best particle`, pad(best)],
     [`min ${b.objective ?? "energy"}`, fmt(Math.min(...energies))],
     ["mean", fmt(mean)],
     ["max", fmt(Math.max(...energies))],
   ];
-  if (frame.particle_spread_m != null) rows.push(["spread", fmt(frame.particle_spread_m) + " m"]);
-  if (frame.goal_errors_m) rows.push(["min goal error", fmt(Math.min(...frame.goal_errors_m)) + " m"]);
+  if (frame.particle_spread_m != null) rows.push(["spread", mm(frame.particle_spread_m)]);
+  if (frame.goal_errors_m) rows.push(["min goal error", mm(Math.min(...frame.goal_errors_m))]);
   if (frame.global_best_energy != null) {
     rows.push(["global best", `${fmt(frame.global_best_energy)} @ it ${frame.global_best_iteration}`
-      + ` P${String(frame.global_best_particle).padStart(2, "0")}`]);
+      + ` ${pad(frame.global_best_particle)}`]);
   }
   if (b.start_eef) rows.push(["start eef", xyz(b.start_eef)]);
   if (b.goal_eef) rows.push([b.goal_is_diagnostic_only ? "goal eef (diagnostic)" : "goal eef", xyz(b.goal_eef)]);
+
+  // A picked particle gets its own read-out -- the point of picking one.
+  const t = theme();
+  picked().forEach((particle, index) => {
+    const swatch = `<span class="swatch" style="background:${pickColor(t, index)}"></span>`;
+    rows.push([`${swatch}${pad(particle)} ${b.objective ?? "energy"}`, fmt(energies[particle])]);
+    const target = (markersOf(frame) || [])[particle];
+    const terminal = (frame.terminals || [])[particle];
+    if (frame.goal_errors_m) rows.push([`${pad(particle)} goal error`, mm(frame.goal_errors_m[particle])]);
+    if (target && terminal) rows.push([`${pad(particle)} tracking`, mm(distance(target, terminal))]);
+    if (terminal) rows.push([`${pad(particle)} terminal`, xyz(terminal)]);
+    const objects = (frame.object_paths || [])[particle];
+    if (objects) {
+      objects.forEach((track, oi) => {
+        if (!track || track.length < 2) return;
+        const name = (b.object_names || [])[oi] || `object ${oi}`;
+        rows.push([`${name} moved`, mm(distance(track[0], track[track.length - 1]))]);
+      });
+    }
+  });
   el("stat-iter").textContent = frame.iteration;
   el("stats").innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
 
-  // Table view: the readable-without-colour channel, and a click-to-focus list.
-  const focus = focusIndex();
+  // Table view: the readable-without-colour channel, and a click-to-pick list.
+  const list = picked();
   const minEnergy = Math.min(...energies);
   const order = energies.map((e, p) => [e, p]).sort((a, c) => a[0] - c[0]);
   el("ptable").innerHTML = order.map(([energy, p]) => {
-    const classes = [p === focus ? "is-focus" : "", p === best ? "is-best" : ""].join(" ");
-    const goal = frame.goal_errors_m ? fmt(frame.goal_errors_m[p], 3) : "—";
-    return `<tr class="${classes}" data-particle="${p}">` +
-      `<td>P${String(p).padStart(2, "0")}</td><td>${fmt(energy)}</td>` +
+    const index = list.indexOf(p);
+    const swatch = index >= 0
+      ? `<span class="swatch" style="background:${pickColor(t, index)}"></span>`
+      : (p === best ? `<span class="swatch hollow"></span>` : "");
+    const goal = frame.goal_errors_m ? mm(frame.goal_errors_m[p]) : "—";
+    return `<tr class="${index >= 0 ? "is-picked" : ""}" data-particle="${p}">` +
+      `<td>${swatch}${pad(p)}${p === best ? " ◆" : ""}</td><td>${fmt(energy)}</td>` +
       `<td>${fmt(energy - minEnergy)}</td><td>${goal}</td></tr>`;
   }).join("");
 }
 
-// --- 3D scene ------------------------------------------------------------ //
-function focusIndex() {
-  const b = state.bundle, frame = b.frames[state.iter];
-  if (state.focus === "best") return frame.best_particle ?? null;
-  if (state.focus === "gbest") return frame.global_best_particle ?? null;
-  if (state.focus === "all") return null;
-  return Number(state.focus);
+// --- terminal renders ---------------------------------------------------- //
+// The 3D plot shows where a particle went; these show what it produced -- the
+// exact frame the objective was computed on, beside the goal it was scored
+// against. Pixels are fetched per view rather than carried in the bundle.
+const imageURL = (path) =>
+  `/api/image?key=${encodeURIComponent(state.bundle.key)}&path=${encodeURIComponent(path)}`;
+
+function renderImages() {
+  const b = state.bundle, panel = el("renders");
+  if (!state.opts.renders || !b.images_available) {
+    panel.innerHTML = "";
+    return;
+  }
+  const t = theme(), frame = frameNow(), list = picked();
+  const tiles = [];
+  if (b.goal_image) {
+    tiles.push({ path: b.goal_image, label: "goal", detail: "scored against", goal: true });
+  }
+  // With nothing picked the iteration's own best stands in, so the panel is
+  // never empty just because the user has not chosen a particle yet.
+  const shown = list.length
+    ? list.map((particle, index) => ({ particle, color: pickColor(t, index) }))
+    : (frame.best_particle != null ? [{ particle: frame.best_particle, color: null }] : []);
+  for (const { particle, color } of shown) {
+    const path = (frame.images || [])[particle]
+      || (particle === frame.best_particle ? frame.best_image : null);
+    const goalError = frame.goal_errors_m ? ` · ${mm(frame.goal_errors_m[particle])} from goal` : "";
+    tiles.push({
+      path,
+      label: pad(particle) + (particle === frame.best_particle ? " (best)" : ""),
+      detail: `it ${frame.iteration} · ${b.objective ?? "energy"} `
+        + `${fmt(frame.energies[particle])}${goalError}`,
+      color,
+    });
+  }
+  panel.innerHTML = tiles.map((tile) => {
+    const swatch = tile.color
+      ? `<span class="swatch" style="background:${tile.color}"></span>` : "";
+    const body = tile.path
+      ? `<a class="frame" href="${imageURL(tile.path)}" target="_blank" rel="noopener">` +
+        `<img src="${imageURL(tile.path)}" alt="${tile.label}" loading="lazy" decoding="async">` +
+        `</a>`
+      : `<div class="frame"><div class="miss">no render saved</div></div>`;
+    return `<figure class="render view-${state.opts.renderView}` +
+      `${tile.goal ? " is-goal" : ""}">` +
+      `<figcaption>${swatch}<b>${tile.label}</b>` +
+      `<span class="num">${tile.detail}</span></figcaption>${body}</figure>`;
+  }).join("");
 }
 
-function lineTrace(path, name, color, width, opacity, hover) {
-  return {
-    type: "scatter3d", mode: "lines", name, showlegend: false,
-    x: path.map((p) => p[0]), y: path.map((p) => p[1]), z: path.map((p) => p[2]),
-    line: { color, width },
-    opacity,
-    hovertemplate: hover + "<br>x %{x:.4f}  y %{y:.4f}  z %{z:.4f}<extra></extra>",
+// --- 3D scene ------------------------------------------------------------ //
+function lineTrace(points, options) {
+  return Object.assign({
+    type: "scatter3d", mode: "lines", showlegend: false,
+    x: points.map((p) => p[0]), y: points.map((p) => p[1]), z: points.map((p) => p[2]),
+  }, options);
+}
+
+// The rollout-step slider indexes the sampled waypoints; arm poses are stored on
+// a coarser stride, so map through the original simulator step index.
+function armIndexFor(step) {
+  const rollout = state.bundle.rollout || {};
+  const pathSteps = rollout.path_steps, armSteps = rollout.arm_steps;
+  if (!pathSteps || !armSteps || !armSteps.length) return null;
+  const wanted = pathSteps[Math.min(step, pathSteps.length - 1)];
+  let bestIndex = 0, bestGap = Infinity;
+  armSteps.forEach((value, index) => {
+    const gap = Math.abs(value - wanted);
+    if (gap < bestGap) { bestGap = gap; bestIndex = index; }
+  });
+  return bestIndex;
+}
+const stepLabel = () => {
+  const rollout = state.bundle.rollout || {};
+  const steps = rollout.path_steps || [];
+  const simStep = steps[state.step];
+  return simStep == null
+    ? `waypoint ${state.step + 1}/${state.bundle.waypoints}`
+    : `step ${simStep}/${(rollout.steps || steps.length) - 1}`;
+};
+
+function pathTraces(t, traces) {
+  const b = state.bundle, frame = frameNow(), opts = state.opts;
+  const list = picked();
+  (frame.paths || []).forEach((path, p) => {
+    if (!path) return;
+    const index = list.indexOf(p);
+    const isPick = index >= 0;
+    if (opts.solo && list.length && !isPick) return;
+    const dimmed = list.length && !isPick;
+    const color = isPick ? pickColor(t, index) : (dimmed ? t.muted : colorOf(t, p));
+    const cut = opts.reveal ? Math.max(state.step + 1, 2) : path.length;
+    const points = path.slice(0, cut);
+    const energy = frame.energies[p];
+    traces.push(lineTrace(points, {
+      name: pad(p),
+      meta: { particle: p },
+      line: { color, width: isPick ? 5 : 2 },
+      opacity: dimmed ? 0.22 : (isPick ? 1 : 0.85),
+      customdata: points.map((_, i) => (b.rollout.path_steps || [])[i] ?? i),
+      hovertemplate: `<b>${pad(p)}</b> · it ${frame.iteration} · step %{customdata}` +
+        `<br>${b.objective ?? "energy"} ${fmt(energy)}` +
+        "<br>x %{x:.4f}  y %{y:.4f}  z %{z:.4f}<extra></extra>",
+    }));
+
+    // Direction is what tells a rollout apart from a static line: arrowheads
+    // along the way, and a bead at the scrubbed step. Arrows stay with the
+    // particles under study (picked, else the iteration's best) so twenty
+    // rollouts do not turn into sixty overlapping cones; the time bead goes on
+    // everything while revealing, which is how you watch the population sweep.
+    const focused = isPick || (!list.length && p === frame.best_particle);
+    if (!opts.direction || dimmed || !(focused || opts.reveal)) return;
+    const arrowAt = isPick ? [0.25, 0.5, 0.75] : [0.55];
+    const cones = focused
+      ? arrowAt.map((f) => Math.floor(f * (points.length - 1))).filter((i) => i > 0)
+      : [];
+    if (cones.length) {
+      // Unit direction vectors, so an arrowhead is one fixed fraction of the
+      // view no matter how long that particular waypoint step happened to be.
+      const span = Math.hypot(...[0, 1, 2].map((k) => ranges()[k][1] - ranges()[k][0]));
+      const heading = cones.map((i) => {
+        const delta = [0, 1, 2].map((k) => points[i][k] - points[i - 1][k]);
+        const norm = Math.hypot(...delta) || 1;
+        return delta.map((d) => d / norm);
+      });
+      traces.push({
+        type: "cone", showscale: false, colorscale: solidscale(color),
+        sizemode: "absolute", sizeref: span * 0.012, anchor: "cm",
+        opacity: isPick ? 0.95 : 0.5,
+        x: cones.map((i) => points[i][0]),
+        y: cones.map((i) => points[i][1]),
+        z: cones.map((i) => points[i][2]),
+        u: heading.map((d) => d[0]), v: heading.map((d) => d[1]), w: heading.map((d) => d[2]),
+        hoverinfo: "skip", meta: { particle: p },
+      });
+    }
+    const bead = path[Math.min(state.step, path.length - 1)];
+    traces.push({
+      type: "scatter3d", mode: "markers", showlegend: false, meta: { particle: p },
+      x: [bead[0]], y: [bead[1]], z: [bead[2]],
+      marker: { size: isPick ? 8 : (focused ? 6 : 4), color,
+                line: { color: t.surface, width: focused ? 2 : 1 } },
+      hovertemplate: `<b>${pad(p)}</b> at ${stepLabel()}` +
+        "<br>x %{x:.4f}  y %{y:.4f}  z %{z:.4f}<extra></extra>",
+    });
+  });
+}
+
+// One skeleton per picked particle: the arm that produced the path, at the
+// scrubbed step, drawn parent-to-child so the fingers stay on the hand.
+function armTraces(t, traces) {
+  const b = state.bundle, frame = frameNow();
+  const armIndex = armIndexFor(state.step);
+  if (armIndex == null || !frame.arms) return;
+  const parents = (b.rollout.arm_link_parents || []);
+  const names = b.rollout.arm_link_names || [];
+  const list = picked().length ? picked() : [frame.best_particle].filter((p) => p != null);
+  list.forEach((particle, index) => {
+    const pose = (frame.arms[particle] || [])[armIndex];
+    if (!pose) return;
+    const color = picked().length ? pickColor(t, index) : t.secondary;
+    const x = [], y = [], z = [];
+    pose.forEach((joint, link) => {
+      const parent = parents[link];
+      const anchor = parent >= 0 ? pose[parent] : (link > 0 ? pose[link - 1] : null);
+      if (!anchor) return;
+      x.push(anchor[0], joint[0], null);
+      y.push(anchor[1], joint[1], null);
+      z.push(anchor[2], joint[2], null);
+    });
+    // Links in neutral ink, joints in the particle's hue: the arm is hardware,
+    // not data, and must not read as a second trajectory of the same colour.
+    traces.push({ type: "scatter3d", mode: "lines", showlegend: false, x, y, z,
+      line: { color: t.secondary, width: 7 }, opacity: 0.5,
+      hoverinfo: "skip", meta: { particle } });
+    traces.push({
+      type: "scatter3d", mode: "markers", showlegend: false, meta: { particle },
+      x: pose.map((j) => j[0]), y: pose.map((j) => j[1]), z: pose.map((j) => j[2]),
+      marker: { size: 4, color, line: { color: t.surface, width: 1 } },
+      customdata: pose.map((_, link) => names[link] || `link ${link}`),
+      hovertemplate: `${pad(particle)} %{customdata}` +
+        "<br>x %{x:.4f}  y %{y:.4f}  z %{z:.4f}<extra></extra>",
+    });
+  });
+}
+
+// Table, robot base: the landmarks that say which way is up and where the
+// workspace sits. Muted on purpose -- they are the room, not the data.
+function landmarkTraces(t, traces) {
+  const scene = state.bundle.scene;
+  if (!scene) return;
+  const table = scene.table;
+  if (table) {
+    const [cx, cy] = table.center, [hx, hy] = table.half_extents, z = table.top_z;
+    const corners = [[cx - hx, cy - hy], [cx + hx, cy - hy], [cx + hx, cy + hy], [cx - hx, cy + hy]];
+    traces.push({
+      type: "mesh3d", x: corners.map((c) => c[0]), y: corners.map((c) => c[1]),
+      z: corners.map(() => z), i: [0, 0], j: [1, 2], k: [2, 3],
+      color: t.grid, opacity: 0.55, flatshading: true,
+      lighting: { ambient: 1, diffuse: 0, specular: 0 },
+      hoverinfo: "text", text: `table top · z ${z.toFixed(3)} m`, showlegend: false,
+    });
+    traces.push(lineTrace([...corners.map((c) => [c[0], c[1], z]), [corners[0][0], corners[0][1], z]], {
+      line: { color: t.axis, width: 2 }, hoverinfo: "skip",
+    }));
+    // Label the corner furthest from the particles, so the landmark names
+    // itself without landing on top of the data in any given run.
+    const extent = ranges();
+    const middle = [0, 1].map((k) => (extent[k][0] + extent[k][1]) / 2);
+    const far = corners.reduce((best, corner) =>
+      Math.hypot(corner[0] - middle[0], corner[1] - middle[1]) >
+      Math.hypot(best[0] - middle[0], best[1] - middle[1]) ? corner : best);
+    traces.push({
+      type: "scatter3d", mode: "text", showlegend: false,
+      x: [far[0]], y: [far[1]], z: [z],
+      text: ["table"], textposition: "middle center",
+      textfont: { size: 10, color: t.muted }, hoverinfo: "skip",
+    });
+  }
+  const base = scene.robot_base;
+  if (base && base.position) {
+    const [bx, by, bz] = base.position;
+    traces.push({
+      type: "scatter3d", mode: "markers+text", showlegend: false,
+      x: [bx], y: [by], z: [bz],
+      marker: { size: 8, symbol: "square", color: t.surface, line: { color: t.muted, width: 2 } },
+      text: [" robot base"], textposition: "middle right",
+      textfont: { size: 10, color: t.muted },
+      hovertemplate: "robot base<br>x %{x:.4f}  y %{y:.4f}  z %{z:.4f}<extra></extra>",
+    });
+    if (table) {
+      traces.push(lineTrace([[bx, by, bz], [bx, by, table.top_z]], {
+        line: { color: t.axis, width: 1, dash: "dot" }, hoverinfo: "skip",
+      }));
+    }
+  }
+}
+
+// Objects: where they start, and -- per particle -- where the rollout pushed
+// them. A track with length is the whole point of the obstacle runs.
+function objectTraces(t, traces) {
+  const b = state.bundle, frame = frameNow(), list = picked();
+  const names = b.object_names || [];
+  const starts = (frame.object_starts || [])[0] || [];
+  starts.forEach((point, index) => {
+    if (!point) return;
+    traces.push({
+      type: "scatter3d", mode: "markers+text", showlegend: false,
+      x: [point[0]], y: [point[1]], z: [point[2]],
+      marker: { size: 10, symbol: "square", color: t.surface,
+                line: { color: t.secondary, width: 2 } },
+      text: [` ${names[index] || "object"}`], textposition: "top center",
+      textfont: { size: 10, color: t.secondary },
+      hovertemplate: `${names[index] || "object"} at rest` +
+        "<br>x %{x:.4f}  y %{y:.4f}  z %{z:.4f}<extra></extra>",
+    });
+  });
+  (frame.object_paths || []).forEach((perObject, particle) => {
+    if (!perObject) return;
+    const index = list.indexOf(particle);
+    if (state.opts.solo && list.length && index < 0) return;
+    (perObject).forEach((track, oi) => {
+      if (!track || track.length < 2) return;
+      const moved = distance(track[0], track[track.length - 1]);
+      if (moved < 0.001) return;                      // still object: nothing to draw
+      const cut = state.opts.reveal ? Math.max(state.step + 1, 2) : track.length;
+      const color = index >= 0 ? pickColor(t, index) : t.muted;
+      traces.push(lineTrace(track.slice(0, cut), {
+        line: { color, width: index >= 0 ? 4 : 1 },
+        opacity: index >= 0 ? 0.9 : 0.3, meta: { particle },
+        hovertemplate: `${names[oi] || "object"} pushed by ${pad(particle)} · ${mm(moved)}` +
+          "<br>x %{x:.4f}  y %{y:.4f}  z %{z:.4f}<extra></extra>",
+      }));
+    });
+  });
+}
+
+// Start / goal / fixed target, plus the geometry that makes the goal findable:
+// a tolerance ring, a drop line to the table, and the residual to the best.
+function anchorTraces(t, traces) {
+  const b = state.bundle, frame = frameNow(), opts = state.opts;
+  const anchor = (point, label, symbol, position) => {
+    if (!point) return;
+    traces.push({
+      type: "scatter3d", mode: "markers+text", showlegend: false,
+      x: [point[0]], y: [point[1]], z: [point[2]],
+      marker: { size: 10, symbol, color: t.surface, line: { color: t.ink, width: 2 } },
+      text: [` ${label}`], textposition: position,
+      textfont: { size: 11, color: t.ink },
+      hovertemplate: `${label}<br>x %{x:.4f}  y %{y:.4f}  z %{z:.4f}<extra></extra>`,
+    });
   };
+  if (opts.anchors) {
+    anchor(b.start_eef, "start", "circle", "middle right");
+    anchor(b.goal_eef, b.goal_is_diagnostic_only ? "GOAL (diagnostic)" : "GOAL", "cross", "top center");
+    if (distance(b.target_eef, b.goal_eef) > 1e-4) {
+      anchor(b.target_eef, "fixed target", "x", "bottom center");
+    }
+  }
+  if (!opts.goalring || !b.goal_eef) return;
+
+  // Ring: three orthogonal circles at the goal tolerance -- a sphere reads as a
+  // blob in a stretched 3D box, rings keep their radius legible.
+  const radius = b.goal_tolerance_m || 0.03;
+  const steps = 48;
+  const circle = (a, c) => {
+    const points = [];
+    for (let i = 0; i <= steps; i++) {
+      const angle = (i / steps) * Math.PI * 2;
+      const point = b.goal_eef.slice();
+      point[a] += radius * Math.cos(angle);
+      point[c] += radius * Math.sin(angle);
+      points.push(point);
+    }
+    return points;
+  };
+  for (const [a, c] of [[0, 1], [0, 2], [1, 2]]) {
+    traces.push(lineTrace(circle(a, c), {
+      line: { color: t.ink, width: 1 }, opacity: 0.45, hoverinfo: "skip",
+    }));
+  }
+  const floor = (b.scene && b.scene.table) ? b.scene.table.top_z : ranges()[2][0];
+  traces.push(lineTrace([b.goal_eef, [b.goal_eef[0], b.goal_eef[1], floor]], {
+    line: { color: t.ink, width: 1, dash: "dot" }, opacity: 0.5, hoverinfo: "skip",
+  }));
+
+  // Residual: the gap the optimiser still has to close, drawn and labelled.
+  const best = frame.best_particle;
+  const terminal = best != null ? (frame.terminals || [])[best] : null;
+  if (terminal) {
+    const gap = distance(terminal, b.goal_eef);
+    traces.push(lineTrace([terminal, b.goal_eef], {
+      line: { color: t.ink, width: 2, dash: "dash" }, opacity: 0.6,
+      hovertemplate: `best ${pad(best)} → goal · ${mm(gap)}<extra></extra>`,
+    }));
+    // Only label the residual when the two ends are far enough apart for the
+    // text to sit clear of the goal label; otherwise the hover carries it.
+    const extent = ranges();
+    const diagonal = Math.hypot(...[0, 1, 2].map((k) => extent[k][1] - extent[k][0]));
+    if (gap > diagonal * 0.06) {
+      const middle = [0, 1, 2].map((k) => (terminal[k] + b.goal_eef[k]) / 2);
+      traces.push({
+        type: "scatter3d", mode: "text", showlegend: false,
+        x: [middle[0]], y: [middle[1]], z: [middle[2]],
+        text: [mm(gap)], textposition: "middle center",
+        textfont: { size: 11, color: t.ink }, hoverinfo: "skip",
+      });
+    }
+  }
 }
 
 function sceneTraces(t) {
-  const b = state.bundle, frame = b.frames[state.iter], opts = state.opts;
-  const focus = focusIndex();
+  const b = state.bundle, frame = frameNow(), opts = state.opts;
+  const list = picked();
   const span = Math.max(b.eMax - b.eMin, 1e-9);
   const norm = (energy) => (energy - b.eMin) / span;
   const traces = [];
 
-  // Ghosts: where the population was in the previous few iterations.
-  if (opts.ghosts) {
-    const gx = [], gy = [], gz = [];
-    for (let i = Math.max(0, state.iter - 5); i < state.iter; i++) {
-      for (const path of state.bundle.frames[i].paths || []) {
-        if (!path) continue;
-        for (const p of path) { gx.push(p[0]); gy.push(p[1]); gz.push(p[2]); }
-        gx.push(null); gy.push(null); gz.push(null);
-      }
-    }
-    if (gx.length) {
-      traces.push({ type: "scatter3d", mode: "lines", name: "previous iterations",
-        x: gx, y: gy, z: gz, line: { color: t.muted, width: 1 }, opacity: 0.22,
-        hoverinfo: "skip", showlegend: false });
-    }
-  }
+  if (opts.landmarks) landmarkTraces(t, traces);
+  if (opts.objects) objectTraces(t, traces);
 
-  // Rollout paths, one line per particle.
-  if (opts.paths) {
-    (frame.paths || []).forEach((path, p) => {
-      if (!path) return;
-      const energy = frame.energies[p];
-      const isFocus = focus === p;
-      const dimmed = focus !== null && !isFocus;
-      const color = dimmed ? t.muted : (isFocus ? t.focus : rampColor(t.ramp, norm(energy)));
-      traces.push(lineTrace(path, `P${p}`, color, isFocus ? 5 : 2, dimmed ? 0.25 : 0.9,
-        `<b>P${String(p).padStart(2, "0")}</b> · it ${frame.iteration}` +
-        `<br>${b.objective ?? "energy"} ${fmt(energy)}`));
+  // Ghosts: the same particles a few iterations ago -- this is the "evolution"
+  // channel, so when a particle is picked its own history is what fades.
+  if (opts.ghosts) {
+    // One ghost trace per picked particle keeps each history in its own hue;
+    // with nothing picked the whole population fades together in neutral ink.
+    const groups = list.length ? list.map((p) => [p]) : [null];
+    groups.forEach((group, index) => {
+      const gx = [], gy = [], gz = [];
+      for (let i = Math.max(0, state.iter - 5); i < state.iter; i++) {
+        (state.bundle.frames[i].paths || []).forEach((path, p) => {
+          if (!path || (group && !group.includes(p))) return;
+          for (const point of path) { gx.push(point[0]); gy.push(point[1]); gz.push(point[2]); }
+          gx.push(null); gy.push(null); gz.push(null);
+        });
+      }
+      if (!gx.length) return;
+      traces.push({ type: "scatter3d", mode: "lines", name: "previous iterations",
+        x: gx, y: gy, z: gz,
+        line: { color: group ? pickColor(t, index) : t.muted, width: 1 },
+        opacity: 0.25, hoverinfo: "skip", showlegend: false });
     });
   }
+
+  if (opts.paths) pathTraces(t, traces);
 
   // Endpoints of this iteration, coloured by energy (the ramp's colourbar is
   // the legend for magnitude).
   if (opts.endpoints) {
-    const pts = (markersOf(frame) || []).map((p, i) => [p, i]).filter(([p]) => p);
+    const pts = (markersOf(frame) || []).map((p, i) => [p, i])
+      .filter(([p, i]) => p && !(opts.solo && list.length && !list.includes(i)));
     traces.push({
       type: "scatter3d", mode: "markers", name: "endpoints",
       x: pts.map(([p]) => p[0]), y: pts.map(([p]) => p[1]), z: pts.map(([p]) => p[2]),
@@ -513,7 +1177,7 @@ function sceneTraces(t) {
 
   // Trails: each particle's endpoint across the iterations seen so far.
   if (opts.trails) {
-    const trail = (indices, color, width, opacity, name) => {
+    const trail = (indices, color, width, opacity) => {
       const x = [], y = [], z = [];
       for (const p of indices) {
         for (let i = 0; i <= state.iter; i++) {
@@ -522,90 +1186,38 @@ function sceneTraces(t) {
         }
         x.push(null); y.push(null); z.push(null);
       }
-      traces.push({ type: "scatter3d", mode: "lines", name, x, y, z,
+      traces.push({ type: "scatter3d", mode: "lines", x, y, z,
         line: { color, width }, opacity, hoverinfo: "skip", showlegend: false });
     };
     const all = [...Array(b.particles).keys()];
-    if (focus === null) trail(all, t.muted, 1, 0.45, "endpoint trails");
-    else {
-      trail(all.filter((p) => p !== focus), t.muted, 1, 0.18, "endpoint trails");
-      trail([focus], t.focus, 4, 0.9, "focused trail");
-    }
+    const rest = all.filter((p) => !list.includes(p));
+    if (!(opts.solo && list.length)) trail(rest, t.muted, 1, list.length ? 0.18 : 0.45);
+    list.forEach((p, index) => trail([p], pickColor(t, index), 4, 0.9));
   }
 
-  // Best particle of this iteration: shape + direct label, so it never relies
-  // on hue alone.
-  const best = frame.best_particle;
-  const bestPoint = best != null ? (markersOf(frame) || [])[best] : null;
-  if (bestPoint) {
+  // Rankings are shape + label, never hue: hue is spoken for by energy and by
+  // the picked particles.
+  const rank = (particle, label, symbol, size, position) => {
+    const point = particle != null ? (markersOf(frame) || [])[particle] : null;
+    if (!point) return;
     traces.push({
-      type: "scatter3d", mode: "markers+text", name: "best",
-      x: [bestPoint[0]], y: [bestPoint[1]], z: [bestPoint[2]],
-      marker: { size: 11, symbol: "diamond", color: t.best,
-                line: { color: t.surface, width: 2 } },
-      text: [` best P${String(best).padStart(2, "0")}`],
-      textposition: "top right",
+      type: "scatter3d", mode: "markers+text", meta: { particle },
+      x: [point[0]], y: [point[1]], z: [point[2]],
+      marker: { size, symbol, color: t.surface, line: { color: t.ink, width: 2 } },
+      text: [` ${label} ${pad(particle)}`], textposition: position,
       textfont: { size: 11, color: t.secondary },
-      hovertemplate: `<b>best P${best}</b><br>${b.objective ?? "energy"} ` +
-        fmt(frame.energies[best]) + "<br>x %{x:.4f}  y %{y:.4f}  z %{z:.4f}<extra></extra>",
+      hovertemplate: `<b>${label} ${pad(particle)}</b><br>${b.objective ?? "energy"} ` +
+        fmt(frame.energies[particle]) + "<br>x %{x:.4f}  y %{y:.4f}  z %{z:.4f}<extra></extra>",
       showlegend: false,
     });
-  }
-  if (focus !== null && focus !== best) {
-    const point = (markersOf(frame) || [])[focus];
-    if (point) {
-      traces.push({
-        type: "scatter3d", mode: "markers+text", name: "focus",
-        x: [point[0]], y: [point[1]], z: [point[2]],
-        marker: { size: 9, color: t.focus, line: { color: t.surface, width: 2 } },
-        text: [` P${String(focus).padStart(2, "0")}`],
-        textposition: "bottom right",
-        textfont: { size: 11, color: t.secondary },
-        hoverinfo: "skip", showlegend: false,
-      });
-    }
+  };
+  rank(frame.best_particle, "best", "diamond", 11, "top right");
+  if (frame.global_best_particle != null && frame.global_best_iteration === frame.iteration) {
+    rank(frame.global_best_particle, "global best", "diamond-open", 14, "bottom right");
   }
 
-  // Scene anchors: neutral ink, always directly labelled.
-  if (opts.anchors) {
-    const anchor = (point, label, symbol, position) => {
-      if (!point) return;
-      traces.push({
-        type: "scatter3d", mode: "markers+text",
-        x: [point[0]], y: [point[1]], z: [point[2]],
-        marker: { size: 9, symbol, color: t.surface, line: { color: t.secondary, width: 2 } },
-        text: [` ${label}`], textposition: position,
-        textfont: { size: 11, color: t.secondary },
-        hovertemplate: `${label}<br>x %{x:.4f}  y %{y:.4f}  z %{z:.4f}<extra></extra>`,
-        showlegend: false,
-      });
-    };
-    anchor(b.start_eef, "start", "circle", "middle right");
-    anchor(b.goal_eef, b.goal_is_diagnostic_only ? "goal (diagnostic)" : "goal", "cross",
-           "top center");
-    anchor(b.target_eef, "fixed target", "x", "bottom center");
-  }
-
-  // Tracked objects (obstacle runs): where the object ended up per particle.
-  if (b.object_names && b.object_names.length && frame.object_ends) {
-    const ends = frame.object_ends.flatMap((o) => o || []);
-    const starts = (frame.object_starts[0] || []);
-    if (starts.length) {
-      traces.push({ type: "scatter3d", mode: "markers", name: "object start",
-        x: starts.map((p) => p[0]), y: starts.map((p) => p[1]), z: starts.map((p) => p[2]),
-        marker: { size: 10, symbol: "square", color: t.surface,
-                  line: { color: t.secondary, width: 2 } },
-        hovertemplate: `${b.object_names[0]} start<br>x %{x:.4f} y %{y:.4f} z %{z:.4f}<extra></extra>`,
-        showlegend: false });
-    }
-    if (ends.length) {
-      traces.push({ type: "scatter3d", mode: "markers", name: "object end",
-        x: ends.map((p) => p[0]), y: ends.map((p) => p[1]), z: ends.map((p) => p[2]),
-        marker: { size: 5, symbol: "square", color: t.muted, opacity: 0.7 },
-        hovertemplate: `${b.object_names[0]} after rollout<br>x %{x:.4f} y %{y:.4f} z %{z:.4f}<extra></extra>`,
-        showlegend: false });
-    }
-  }
+  if (opts.arm) armTraces(t, traces);
+  anchorTraces(t, traces);
 
   // Search bounds as a wireframe box.
   if (opts.bounds && b.bounds && b.bounds.length === 6) {
@@ -624,8 +1236,65 @@ function sceneTraces(t) {
   return traces;
 }
 
+// How the three axes are scaled against each other.
+//
+// "true" is the honest one, but these runs routinely put millimetres of x
+// against half a metre of y, and a 1:100 box renders as an unreadable sheet.
+// "floor" keeps the metric ratio wherever it is legible and only lifts an axis
+// that would otherwise vanish, up to FLOOR of the longest one -- and reports
+// how much it lifted, so the exaggeration is never silent.
+const ASPECT_FLOOR = 0.22;
+
+function aspect(extent) {
+  const spans = extent.map(([lo, hi]) => hi - lo);
+  const longest = Math.max(...spans);
+  const trueRatio = spans.map((span) => span / longest);
+  if (state.opts.proportions === "cube") {
+    return { mode: "cube", drawn: [1, 1, 1], trueRatio };
+  }
+  // Both metric modes go through "manual" rather than "data". Plotly renormalises
+  // a data-aspect box to unit volume behind the scenes, and the camera distance
+  // below has to be computed against the box that actually gets drawn -- so the
+  // same normalisation is applied here, in the open, for both.
+  const wanted = state.opts.proportions === "true"
+    ? trueRatio
+    : trueRatio.map((ratio) => Math.max(ratio, ASPECT_FLOOR));
+  const volume = Math.cbrt(wanted[0] * wanted[1] * wanted[2]);
+  return { mode: "manual", drawn: wanted.map((ratio) => ratio / volume), trueRatio };
+}
+
+// Plotly's camera sits in the aspect box's own units, so a true-proportion box
+// that is 7 units long on one axis needs the eye pulled back by the same factor
+// -- otherwise the camera ends up inside the scene and the plot spills out of
+// its panel. Closer than Plotly's default for a cube, where the default leaves
+// a small box in a big margin.
+const EYE_DIRECTION = [1.15, 1.15, 0.7];
+
+function eye(shape) {
+  const cube = Math.sqrt(3);                       // the box this eye was tuned on
+  const scale = Math.hypot(...shape.drawn) / cube;
+  const [x, y, z] = EYE_DIRECTION.map((value) => value * scale);
+  return { x, y, z };
+}
+
+function renderProportionNote() {
+  const { drawn, trueRatio } = aspect(ranges());
+  const names = ["x", "y", "z"];
+  // Only relative stretch is visible, so the least-stretched axis is 1x.
+  const gains = drawn.map((value, k) => value / trueRatio[k]);
+  const reference = Math.min(...gains);
+  const stretched = gains
+    .map((gain, k) => [names[k], gain / reference])
+    .filter(([, factor]) => factor > 1.15)
+    .map(([name, factor]) => `${name} ×${factor < 10 ? factor.toFixed(1) : Math.round(factor)}`);
+  el("proportionNote").textContent = stretched.length
+    ? `Exaggerated to stay readable: ${stretched.join(", ")}. Shapes in those `
+      + "directions are not to scale."
+    : "Drawn to scale — a millimetre reads the same on every axis.";
+}
+
 function sceneLayout(t) {
-  const b = state.bundle;
+  const b = state.bundle, extent = ranges(), shape = aspect(extent);
   const axis = (title, range) => ({
     title: { text: title, font: { size: 11, color: t.muted } },
     range,
@@ -642,27 +1311,48 @@ function sceneLayout(t) {
     margin: { l: 0, r: 0, t: 0, b: 0 },
     showlegend: false,
     scene: {
-      xaxis: axis("x (m)", b.ranges[0]),
-      yaxis: axis("y (m)", b.ranges[1]),
-      zaxis: axis("z (m)", b.ranges[2]),
-      aspectmode: state.opts.equal ? "data" : "cube",
-      camera: { eye: { x: 1.5, y: 1.5, z: 0.9 } },
+      xaxis: axis("x (m)", extent[0]),
+      yaxis: axis("y (m)", extent[1]),
+      zaxis: axis("z (m)", extent[2]),
+      aspectmode: shape.mode,
+      aspectratio: { x: shape.drawn[0], y: shape.drawn[1], z: shape.drawn[2] },
+      camera: { eye: eye(shape) },
     },
-    uirevision: b.key + (state.opts.equal ? "-data" : "-cube"),
+    // Proportions belong in the revision key: they change the size of the box
+    // the camera has to clear, so a stale camera would cut the scene in half.
+    uirevision: b.key + state.opts.framing + state.opts.proportions,
     hoverlabel: { bgcolor: t.surface, bordercolor: t.axis,
                   font: { color: t.ink, size: 12 } },
   };
 }
 
-// --- energy-vs-iteration strip ------------------------------------------- //
-function energyFigure(t) {
+// --- metric-vs-iteration strip ------------------------------------------- //
+const STRIP = {
+  energy: { label: null, column: (f) => f.energies, scale: 1 },
+  goal: { label: "goal error (mm)", column: (f) => f.goal_errors_m, scale: 1000 },
+  tracking: { label: "tracking error (mm)", column: (f) => f.target_tracking_errors_m, scale: 1000 },
+  spread: { label: "particle spread (mm)", column: (f) => (f.particle_spread_m == null
+    ? null : [f.particle_spread_m]), scale: 1000 },
+};
+
+function stripFigure(t) {
   const b = state.bundle;
+  const spec = STRIP[state.opts.metric] || STRIP.energy;
+  const label = spec.label || (b.objective ?? "energy");
   const iterations = b.frames.map((f) => f.iteration);
-  const mins = b.frames.map((f) => Math.min(...f.energies));
-  const maxs = b.frames.map((f) => Math.max(...f.energies));
-  const means = b.frames.map((f) => f.energies.reduce((a, c) => a + c, 0) / f.energies.length);
-  const focus = focusIndex();
-  const traces = [
+  const columns = b.frames.map((f) => {
+    const values = spec.column(f);
+    return values ? values.map((v) => v * spec.scale).filter(isFinite) : [];
+  });
+  const has = columns.some((c) => c.length);
+  const mins = columns.map((c) => (c.length ? Math.min(...c) : null));
+  const maxs = columns.map((c) => (c.length ? Math.max(...c) : null));
+  const means = columns.map((c) => (c.length ? c.reduce((a, v) => a + v, 0) / c.length : null));
+  // A per-population metric gets a band + mean + best; a metric that is one
+  // number per iteration (spread) is just a line -- a band of zero width and a
+  // "best" identical to the mean would be three ways of drawing one series.
+  const perParticle = columns.some((c) => c.length > 1);
+  const traces = !has ? [] : perParticle ? [
     { type: "scatter", mode: "lines", name: "population range",
       x: iterations.concat([...iterations].reverse()),
       y: maxs.concat([...mins].reverse()),
@@ -672,29 +1362,41 @@ function energyFigure(t) {
       line: { color: t.accent, width: 2 },
       hovertemplate: "it %{x} · mean %{y:.4f}<extra></extra>" },
     { type: "scatter", mode: "lines", name: "best", x: iterations, y: mins,
-      line: { color: t.best, width: 2, dash: "dot" },
+      line: { color: t.accent, width: 2, dash: "dot" },
       hovertemplate: "it %{x} · best %{y:.4f}<extra></extra>" },
+  ] : [
+    { type: "scatter", mode: "lines", name: label, x: iterations, y: means,
+      line: { color: t.accent, width: 2 },
+      hovertemplate: "it %{x} · %{y:.4f}<extra></extra>" },
   ];
-  if (focus !== null) {
-    traces.push({ type: "scatter", mode: "lines", name: `P${String(focus).padStart(2, "0")}`,
-      x: iterations, y: b.frames.map((f) => f.energies[focus]),
-      line: { color: t.focus, width: 2 },
-      hovertemplate: "it %{x} · P" + focus + " %{y:.4f}<extra></extra>" });
-  }
+  (perParticle ? picked() : []).forEach((particle, index) => {
+    const values = b.frames.map((f) => {
+      const column = spec.column(f);
+      return column && column[particle] != null ? column[particle] * spec.scale : null;
+    });
+    if (values.every((v) => v == null)) return;
+    traces.push({ type: "scatter", mode: "lines", name: pad(particle),
+      x: iterations, y: values,
+      line: { color: pickColor(t, index), width: 2.5 },
+      hovertemplate: `it %{x} · ${pad(particle)} %{y:.4f}<extra></extra>` });
+  });
   const layout = {
     paper_bgcolor: t.surface, plot_bgcolor: t.surface,
-    margin: { l: 56, r: 16, t: 22, b: 32 },
-    height: 170,
+    margin: { l: 64, r: 16, t: 24, b: 34 },
+    height: 176,
     hovermode: "x unified",
     xaxis: { title: { text: "iteration", font: { size: 11, color: t.muted } },
              gridcolor: t.grid, linecolor: t.axis, zeroline: false,
              tickfont: { size: 10, color: t.muted } },
-    yaxis: { title: { text: b.objective ?? "energy", font: { size: 11, color: t.muted } },
+    yaxis: { title: { text: label, font: { size: 11, color: t.muted } },
              gridcolor: t.grid, linecolor: t.axis, zeroline: false,
              tickfont: { size: 10, color: t.muted } },
-    legend: { orientation: "h", y: 1.28, x: 0, font: { size: 11, color: t.secondary } },
+    legend: { orientation: "h", y: 1.3, x: 0, font: { size: 11, color: t.secondary } },
     shapes: [{ type: "line", x0: b.frames[state.iter].iteration, x1: b.frames[state.iter].iteration,
                yref: "paper", y0: 0, y1: 1, line: { color: t.muted, width: 1, dash: "dash" } }],
+    annotations: has ? [] : [{ text: "this run did not record that metric",
+      xref: "paper", yref: "paper", x: 0.5, y: 0.5, showarrow: false,
+      font: { size: 12, color: t.muted } }],
     hoverlabel: { bgcolor: t.surface, bordercolor: t.axis, font: { color: t.ink, size: 12 } },
   };
   return { traces, layout };
@@ -704,26 +1406,57 @@ function energyFigure(t) {
 const CONFIG = { displaylogo: false, responsive: true,
                  modeBarButtonsToRemove: ["sendDataToCloud", "toggleSpikelines"] };
 
-let stripWired = false;
+let wired = false;
+
+// Plot event handlers exist only once Plotly has built the graph divs, so they
+// are attached after the first plot resolves rather than at script load.
+function wire() {
+  if (wired || !el("scene").on || !el("strip").on) return;
+  wired = true;
+  // Plotly's own responsiveness only listens to window resizes, but this plot
+  // also loses height whenever the render strip appears or grows. Without this
+  // its canvas keeps the stale size and paints straight over the panel.
+  if (typeof ResizeObserver !== "undefined") {
+    const fit = new ResizeObserver(() => {
+      for (const id of ["scene", "strip"]) {
+        if (el(id).offsetHeight > 0) Plotly.Plots.resize(el(id));
+      }
+    });
+    fit.observe(el("scene"));
+  }
+  el("strip").on("plotly_click", (event) => {      // scrub by clicking the strip
+    const index = state.bundle.frames.findIndex((f) => f.iteration === event.points[0].x);
+    if (index >= 0) { stop(); setIter(index); }
+  });
+  el("scene").on("plotly_click", (event) => {      // pick a particle in 3D
+    const point = event.points[0];
+    const particle = point.data.meta && point.data.meta.particle != null
+      ? point.data.meta.particle
+      : (Array.isArray(point.customdata) ? point.customdata[0] : null);
+    if (particle != null) {
+      pick(particle, !!(event.event && (event.event.shiftKey || event.event.metaKey)));
+    }
+  });
+}
 
 function render(fresh = false) {
   if (!state.bundle) return;
   const t = theme();
   const method = fresh ? "newPlot" : "react";
-  Plotly[method]("scene", sceneTraces(t), sceneLayout(t), CONFIG);
-  const energy = energyFigure(t);
-  Plotly[method]("energy", energy.traces, energy.layout, CONFIG);
-  if (!stripWired && el("energy").on) {
-    stripWired = true;
-    el("energy").on("plotly_click", (event) => {   // scrub by clicking the strip
-      const index = state.bundle.frames.findIndex((f) => f.iteration === event.points[0].x);
-      if (index >= 0) { stop(); setIter(index); }
-    });
-  }
+  const strip = stripFigure(t);
+  Promise.all([
+    Plotly[method]("scene", sceneTraces(t), sceneLayout(t), CONFIG),
+    Plotly[method]("strip", strip.traces, strip.layout, CONFIG),
+  ]).then(wire);
+  renderPicks();
+  renderVerify();
+  renderProportionNote();
+  renderImages();
   renderStats();
-  const frame = state.bundle.frames[state.iter];
+  const frame = frameNow();
   el("iterLabel").textContent =
     `iteration ${frame.iteration} / ${state.bundle.frames[state.bundle.frames.length - 1].iteration}`;
+  el("stepLabel").textContent = stepLabel();
 }
 
 // --- transport ----------------------------------------------------------- //
@@ -733,52 +1466,105 @@ function setIter(value) {
   el("slider").value = String(state.iter);
   render();
 }
-function play() {
+function setStep(value) {
+  const last = state.bundle.waypoints - 1;
+  state.step = Math.min(last, Math.max(0, value));
+  el("stepSlider").value = String(state.step);
+  render();
+}
+function play(what) {
   if (!state.bundle || state.playing) return;
-  state.playing = true;
-  el("play").textContent = "❚❚ Pause";
+  state.playing = what;
+  el(what === "iter" ? "play" : "playStep").textContent = "❚❚ Pause";
+  const period = what === "iter" ? Number(el("speed").value) : 60;
   state.timer = setInterval(() => {
-    const last = state.bundle.frames.length - 1;
-    if (state.iter >= last) setIter(0); else setIter(state.iter + 1);
-  }, Number(el("speed").value));
+    if (what === "iter") {
+      const last = state.bundle.frames.length - 1;
+      setIter(state.iter >= last ? 0 : state.iter + 1);
+    } else {
+      const last = state.bundle.waypoints - 1;
+      setStep(state.step >= last ? 0 : state.step + 1);
+    }
+  }, period);
 }
 function stop() {
-  state.playing = false;
+  state.playing = null;
   el("play").textContent = "▶ Play";
+  el("playStep").textContent = "▶ Play";
   if (state.timer) { clearInterval(state.timer); state.timer = null; }
 }
-const toggle = () => (state.playing ? stop() : play());
+const toggle = (what) => (state.playing === what ? stop() : (stop(), play(what)));
 
 // --- wiring -------------------------------------------------------------- //
 function readOptions() {
+  const on = (id) => el("opt-" + id).checked && !el("opt-" + id).disabled;
   state.opts = {
-    paths: el("opt-paths").checked,
-    endpoints: el("opt-endpoints").checked,
-    trails: el("opt-trails").checked,
-    ghosts: el("opt-ghosts").checked,
-    anchors: el("opt-anchors").checked,
-    bounds: el("opt-bounds").checked,
-    equal: el("opt-equal").checked,
+    paths: on("paths"),
+    direction: on("direction"),
+    reveal: on("reveal"),
+    endpoints: on("endpoints"),
+    trails: on("trails"),
+    ghosts: on("ghosts"),
+    arm: on("arm"),
+    anchors: on("anchors"),
+    goalring: on("goalring"),
+    landmarks: on("landmarks"),
+    objects: on("objects"),
+    bounds: on("bounds"),
+    solo: on("solo"),
+    renders: on("renders"),
+    renderView: el("renderView").value,
+    framing: el("framing").value,
+    proportions: el("proportions").value,
+    metric: el("stripMetric").value,
   };
 }
 readOptions();
 
-for (const id of ["paths", "endpoints", "trails", "ghosts", "anchors", "bounds", "equal"]) {
+for (const id of ["paths", "direction", "reveal", "endpoints", "trails", "ghosts", "arm",
+                  "anchors", "goalring", "landmarks", "objects", "bounds", "solo", "renders"]) {
   el("opt-" + id).addEventListener("change", () => { readOptions(); render(); });
 }
+for (const id of ["proportions", "renderView"]) {
+  el(id).addEventListener("change", () => { readOptions(); render(); });
+}
+// An arm reaches back to a base that sits well outside the particle cloud, so
+// turning the skeleton on inside a tight framing would show only a stub.
+el("opt-arm").addEventListener("change", (event) => {
+  if (event.target.checked && ["particles", "scene"].includes(el("framing").value)) {
+    el("framing").value = "landmarks";
+    readOptions();
+    render();
+  }
+});
+el("framing").addEventListener("change", () => { readOptions(); render(); });
+el("stripMetric").addEventListener("change", () => { readOptions(); render(); });
 el("trial").addEventListener("change", (event) => loadBundle(event.target.value));
-el("focus").addEventListener("change", (event) => { state.focus = event.target.value; render(); });
+el("mode").addEventListener("change", (event) => {
+  state.mode = event.target.value;
+  render();
+});
 el("slider").addEventListener("input", (event) => { stop(); setIter(Number(event.target.value)); });
-el("play").addEventListener("click", toggle);
+el("stepSlider").addEventListener("input", (event) => { stop(); setStep(Number(event.target.value)); });
+el("play").addEventListener("click", () => toggle("iter"));
+el("playStep").addEventListener("click", () => toggle("step"));
 el("prev").addEventListener("click", () => { stop(); setIter(state.iter - 1); });
 el("next").addEventListener("click", () => { stop(); setIter(state.iter + 1); });
-el("speed").addEventListener("change", () => { if (state.playing) { stop(); play(); } });
+el("prevStep").addEventListener("click", () => { stop(); setStep(state.step - 1); });
+el("nextStep").addEventListener("click", () => { stop(); setStep(state.step + 1); });
+el("speed").addEventListener("change", () => { if (state.playing === "iter") { stop(); play("iter"); } });
 el("ptable").addEventListener("click", (event) => {
   const row = event.target.closest("tr");
-  if (!row) return;
-  state.focus = row.dataset.particle;
-  el("focus").value = state.focus;
-  render();
+  if (row) pick(Number(row.dataset.particle), event.shiftKey || event.metaKey);
+});
+el("picks").addEventListener("click", (event) => {
+  const drop = event.target.dataset.drop;
+  if (drop != null) {
+    state.picks = state.picks.filter((p) => p !== Number(drop));
+    renderPicks(); render();
+  } else if (event.target.id === "clearPicks") {
+    state.picks = []; renderPicks(); render();
+  }
 });
 el("theme").addEventListener("click", () => {
   const dark = getComputedStyle(document.documentElement).colorScheme.includes("dark");
@@ -787,9 +1573,13 @@ el("theme").addEventListener("click", () => {
 });
 document.addEventListener("keydown", (event) => {
   if (event.target.tagName === "SELECT" || event.target.tagName === "INPUT") return;
-  if (event.key === "ArrowLeft") { stop(); setIter(state.iter - 1); }
-  else if (event.key === "ArrowRight") { stop(); setIter(state.iter + 1); }
-  else if (event.key === " ") { event.preventDefault(); toggle(); }
+  const back = event.key === "ArrowLeft", forward = event.key === "ArrowRight";
+  if (!back && !forward && event.key !== " ") return;
+  event.preventDefault();
+  if (event.key === " ") { toggle("iter"); return; }   // space pauses as well as plays
+  stop();
+  if (event.shiftKey) setStep(state.step + (forward ? 1 : -1));
+  else setIter(state.iter + (forward ? 1 : -1));
 });
 
 loadTrials().catch((error) => { el("title").textContent = "Failed to load: " + error; });

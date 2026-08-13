@@ -30,11 +30,15 @@ import numpy as np
 from PIL import Image
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-for _path in (REPO_ROOT, REPO_ROOT / "third_party" / "LIBERO"):
+for _path in (REPO_ROOT, REPO_ROOT / "third_party" / "LIBERO", Path(__file__).resolve().parent):
     if str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
 
+import robosuite.utils.transform_utils as T  # noqa: E402
+
 from libero.libero.envs import OffScreenRenderEnv  # noqa: E402
+import side_camera  # noqa: E402
+from scene_geometry import arm_link_names, arm_link_positions  # noqa: E402
 
 
 DEFAULT_PROMPT = (
@@ -109,6 +113,7 @@ def _clear_previous_run(run_dir: Path, manifest_path: Path) -> None:
         "start.png",
         "start_agentview.png",
         "start_wrist.png",
+        "start_sideview.png",
         "start_state.npy",
         "start_proprio_raw.npy",
         "start_proprio_normalized.npy",
@@ -147,21 +152,81 @@ def _center_crop_resize(image: Image.Image, width: int, height: int) -> Image.Im
     return resized.crop((left, top, left + width, top + height))
 
 
+# Every render in this pipeline is a two-panel ``[agentview | right]`` image, and
+# every latent built from one splits down its middle column, so which camera
+# fills the right half is a property of the whole run rather than of one call
+# site.  It is set once per process -- from the run manifest when there is one --
+# and read by the many nested callers of ``_views_from_obs``.
+RIGHT_VIEW_IMAGE_KEYS = {
+    "wrist": "robot0_eye_in_hand_image",
+    "sideview": side_camera.IMAGE_KEY,
+}
+DEFAULT_RIGHT_VIEW = "sideview"
+_RIGHT_VIEW = DEFAULT_RIGHT_VIEW
+
+
+def set_composed_right_view(name: str) -> str:
+    """Choose the camera that fills the right half of every composed render."""
+    global _RIGHT_VIEW
+    if name not in RIGHT_VIEW_IMAGE_KEYS:
+        raise ValueError(
+            f"Unknown right view {name!r}; expected one of {sorted(RIGHT_VIEW_IMAGE_KEYS)}"
+        )
+    _RIGHT_VIEW = name
+    return _RIGHT_VIEW
+
+
+def composed_right_view() -> str:
+    """The camera currently filling the right half of composed renders."""
+    return _RIGHT_VIEW
+
+
 def _views_from_obs(
     obs: dict[str, np.ndarray],
     view_size: int,
+    right_view: str | None = None,
 ) -> tuple[Image.Image, Image.Image, Image.Image]:
-    # LIBERO training data rotates both camera observations by 180 degrees.
+    # LIBERO training data rotates both camera observations by 180 degrees, and
+    # the side camera is built to the same convention.
+    right_view = _RIGHT_VIEW if right_view is None else right_view
+    right_key = RIGHT_VIEW_IMAGE_KEYS.get(right_view)
+    if right_key is None:
+        raise ValueError(
+            f"Unknown right view {right_view!r}; expected one of {sorted(RIGHT_VIEW_IMAGE_KEYS)}"
+        )
+    if right_key not in obs:
+        raise KeyError(
+            f"Observation has no {right_key!r}; build the env with "
+            f"side_camera.open_env(...) so the {right_view!r} camera is rendered"
+        )
     main = Image.fromarray(np.ascontiguousarray(obs["agentview_image"][::-1, ::-1])).convert("RGB")
-    wrist = Image.fromarray(
-        np.ascontiguousarray(obs["robot0_eye_in_hand_image"][::-1, ::-1])
-    ).convert("RGB")
+    right = Image.fromarray(np.ascontiguousarray(obs[right_key][::-1, ::-1])).convert("RGB")
     main = _center_crop_resize(main, view_size, view_size)
-    wrist = _center_crop_resize(wrist, view_size, view_size)
+    right = _center_crop_resize(right, view_size, view_size)
     composed = Image.new("RGB", (2 * view_size, view_size))
     composed.paste(main, (0, 0))
-    composed.paste(wrist, (view_size, 0))
-    return main, wrist, composed
+    composed.paste(right, (view_size, 0))
+    return main, right, composed
+
+
+def env_from_manifest(manifest: dict[str, Any], **kwargs: Any) -> OffScreenRenderEnv:
+    """Open the run's scene framed exactly as its scene prep framed it.
+
+    Reads back the two facts that decide what a composed render means -- which
+    camera fills the right half, and where that camera sits -- so an optimiser
+    never scores a render against a goal image built from different cameras.
+    Manifests written before the side camera existed carry neither key and are
+    reopened as the stock ``[agentview | wrist]`` pair.
+    """
+    right_view = str(manifest.get("composed_right_view", "wrist"))
+    set_composed_right_view(right_view)
+    pose = manifest.get("side_camera")
+    return side_camera.open_env(
+        bddl_file_name=str(manifest["bddl"]),
+        render_size=int(manifest.get("render_size", 256)),
+        side_camera=pose if pose is not None else (right_view == "sideview"),
+        **kwargs,
+    )
 
 
 def _tracked_object_poses(
@@ -266,6 +331,26 @@ def _minimum_jerk(u: float) -> float:
     return 10.0 * u**3 - 15.0 * u**4 + 6.0 * u**5
 
 
+# OSC_POSE with control_delta=true maps action[3:6] from [-1, 1] onto a
+# world-frame axis-angle delta of +/-OSC_ROTATION_OUTPUT_MAX radians per control
+# step (robosuite/controllers/config/osc_pose.json).
+OSC_ROTATION_OUTPUT_MAX = 0.5
+
+
+def _orientation_delta_axis_angle(
+    current_quat_xyzw: np.ndarray,
+    desired_quat_xyzw: np.ndarray,
+) -> np.ndarray:
+    """World-frame axis-angle taking the current orientation onto the desired one.
+
+    robosuite composes the commanded delta as ``goal = R_delta @ R_current``, so
+    the delta is expressed in the world frame rather than the tool frame.
+    """
+    current = T.quat2mat(np.asarray(current_quat_xyzw, dtype=np.float64))
+    desired = T.quat2mat(np.asarray(desired_quat_xyzw, dtype=np.float64))
+    return np.asarray(T.quat2axisangle(T.mat2quat(desired @ current.T)), dtype=np.float64)
+
+
 def _rollout_to_target(
     env: OffScreenRenderEnv,
     obs: dict[str, np.ndarray],
@@ -274,6 +359,8 @@ def _rollout_to_target(
     move_steps: int,
     settle_steps: int,
     gain: float,
+    target_quat_xyzw: np.ndarray | None = None,
+    rotation_gain: float = 1.0,
     arc_height: float = 0.0,
     midpoint_x: float = 0.0,
     capture_video: bool = False,
@@ -283,6 +370,15 @@ def _rollout_to_target(
 ) -> tuple[dict[str, np.ndarray], np.ndarray, np.ndarray, list[Image.Image]]:
     start = np.asarray(obs["robot0_eef_pos"], dtype=np.float64).copy()
     target = np.asarray(target, dtype=np.float64)
+    # `None` leaves action[3:6] at zero, which is what every position-only
+    # caller relies on: OSC then holds the orientation it started from.
+    start_quat = np.asarray(obs["robot0_eef_quat"], dtype=np.float64).copy()
+    target_quat = (
+        None
+        if target_quat_xyzw is None
+        else np.asarray(target_quat_xyzw, dtype=np.float64)
+        / np.linalg.norm(np.asarray(target_quat_xyzw, dtype=np.float64))
+    )
     actions: list[np.ndarray] = []
     eef_path: list[np.ndarray] = [start.copy()]
     frames: list[Image.Image] = (
@@ -293,6 +389,9 @@ def _rollout_to_target(
         object_names, object_positions, object_quaternions = _tracked_object_poses(
             env
         )
+        # Whole-arm poses, so a trace can be replayed as a skeleton and not just
+        # as the end-effector point it traces out.
+        link_names = arm_link_names(env)
         trace.update(
             {
                 "desired_eefs": [],
@@ -304,7 +403,16 @@ def _rollout_to_target(
                 "tracked_object_names": object_names,
                 "object_positions": [object_positions],
                 "object_quaternions_wxyz": [object_quaternions],
+                "arm_link_names": link_names,
+                "arm_link_positions": [arm_link_positions(env, link_names)],
             }
+        )
+
+    def desired_quat(progress: float) -> np.ndarray | None:
+        if target_quat is None:
+            return None
+        return np.asarray(
+            T.quat_slerp(start_quat, target_quat, float(progress)), dtype=np.float64
         )
 
     def step_toward(
@@ -320,6 +428,14 @@ def _rollout_to_target(
         error = desired - eef_before
         action = np.zeros(7, dtype=np.float32)
         action[:3] = np.clip(gain * error, -1.0, 1.0)
+        quat_desired = desired_quat(progress)
+        if quat_desired is not None:
+            rotation_error = _orientation_delta_axis_angle(
+                obs["robot0_eef_quat"], quat_desired
+            )
+            action[3:6] = np.clip(
+                rotation_gain * rotation_error / OSC_ROTATION_OUTPUT_MAX, -1.0, 1.0
+            )
         action[-1] = -1.0  # keep the gripper open
         if trace is not None:
             trace["desired_eefs"].append(np.asarray(desired, dtype=np.float64).copy())
@@ -335,6 +451,9 @@ def _rollout_to_target(
             _, object_positions, object_quaternions = _tracked_object_poses(env)
             trace["object_positions"].append(object_positions)
             trace["object_quaternions_wxyz"].append(object_quaternions)
+            trace["arm_link_positions"].append(
+                arm_link_positions(env, trace["arm_link_names"])
+            )
         if capture_video and step_idx % max(video_stride, 1) == 0:
             frames.append(_views_from_obs(obs, view_size)[2])
 
@@ -494,6 +613,40 @@ def main() -> None:
     parser.add_argument("--gripper-tolerance", type=float, default=0.01)
     parser.add_argument("--render-size", type=int, default=256)
     parser.add_argument("--view-size", type=int, default=224)
+    parser.add_argument(
+        "--right-view",
+        choices=sorted(RIGHT_VIEW_IMAGE_KEYS),
+        default=DEFAULT_RIGHT_VIEW,
+        help=(
+            "Camera filling the right half of every composed render. 'sideview' "
+            "is a pure side profile of the table, which resolves the height and "
+            "reach that agentview alone leaves ambiguous."
+        ),
+    )
+    parser.add_argument(
+        "--side-camera-margin",
+        type=float,
+        default=side_camera.DEFAULT_MARGIN,
+        help="Meters between the table edge and the side camera.",
+    )
+    parser.add_argument(
+        "--side-camera-height",
+        type=float,
+        default=side_camera.DEFAULT_HEIGHT,
+        help="Meters above the table top that the side camera looks along.",
+    )
+    parser.add_argument(
+        "--side-camera-elevation-deg",
+        type=float,
+        default=side_camera.DEFAULT_ELEVATION_DEG,
+        help="Tilt above the horizontal; 0 keeps the table exactly edge on.",
+    )
+    parser.add_argument(
+        "--side-camera-x",
+        type=float,
+        default=None,
+        help="World x the side camera aims at; defaults to the robot/table midpoint.",
+    )
     parser.add_argument("--reset-render-mae-tolerance", type=float, default=0.25)
     parser.add_argument("--reset-render-outlier-fraction", type=float, default=0.01)
     parser.add_argument("--prompt", default=DEFAULT_PROMPT)
@@ -546,10 +699,22 @@ def main() -> None:
     if np.any(endpoint_sigma < 0.0):
         parser.error("--sample-endpoint-sigma values must be non-negative")
 
-    env = OffScreenRenderEnv(
+    set_composed_right_view(args.right_view)
+    env = side_camera.open_env(
         bddl_file_name=str(bddl_path),
-        camera_heights=args.render_size,
-        camera_widths=args.render_size,
+        render_size=args.render_size,
+    )
+    side_camera_pose = side_camera.install_side_camera(
+        env,
+        margin=args.side_camera_margin,
+        height=args.side_camera_height,
+        elevation_deg=args.side_camera_elevation_deg,
+        x_center=args.side_camera_x,
+    )
+    print(
+        f"[views] composed render = [agentview | {args.right_view}]; side camera at "
+        f"{np.round(side_camera_pose['position'], 3).tolist()} aimed at "
+        f"{np.round(side_camera_pose['target'], 3).tolist()}"
     )
     try:
         env.seed(args.sim_seed)
@@ -592,9 +757,16 @@ def main() -> None:
             tracked_object_positions,
             tracked_object_quaternions,
         ) = _tracked_object_poses(env)
-        start_main, start_wrist, start_image = _views_from_obs(obs, args.view_size)
+        start_main, start_right, start_image = _views_from_obs(obs, args.view_size)
         start_main.save(run_dir / "start_agentview.png")
-        start_wrist.save(run_dir / "start_wrist.png")
+        start_right.save(run_dir / f"start_{args.right_view}.png")
+        # Keep every camera on disk, not just the composed pair, so a run can be
+        # inspected against a view it was not optimised on.
+        for view_name in RIGHT_VIEW_IMAGE_KEYS:
+            if view_name != args.right_view:
+                _views_from_obs(obs, args.view_size, view_name)[1].save(
+                    run_dir / f"start_{view_name}.png"
+                )
         start_image.save(run_dir / "start.png")
         np.save(run_dir / "start_state.npy", start_state)
 
@@ -634,6 +806,11 @@ def main() -> None:
             "prompt": args.prompt,
             "render_size": args.render_size,
             "view_size": args.view_size,
+            # Downstream optimisers read these back so their renders compose the
+            # same two cameras the goal image was built from.
+            "composed_views": ["agentview", args.right_view],
+            "composed_right_view": args.right_view,
+            "side_camera": side_camera_pose,
             "start_image": "start.png",
             "start_state": "start_state.npy",
             "start_proprio_raw": "start_proprio_raw.npy",
@@ -743,9 +920,9 @@ def main() -> None:
             terminal_eef = np.asarray(obs["robot0_eef_pos"], dtype=np.float64).copy()
             terminal_eef_quat = np.asarray(obs["robot0_eef_quat"], dtype=np.float64).copy()
             terminal_gripper = np.asarray(obs["robot0_gripper_qpos"], dtype=np.float64).copy()
-            terminal_main, terminal_wrist, terminal_image = _views_from_obs(obs, args.view_size)
+            terminal_main, terminal_right, terminal_image = _views_from_obs(obs, args.view_size)
             terminal_main.save(candidate_dir / "terminal_agentview.png")
-            terminal_wrist.save(candidate_dir / "terminal_wrist.png")
+            terminal_right.save(candidate_dir / f"terminal_{args.right_view}.png")
             terminal_image.save(candidate_dir / "terminal.png")
             np.save(candidate_dir / "actions.npy", actions.astype(np.float32))
             np.save(candidate_dir / "eef_path.npy", eef_path.astype(np.float32))

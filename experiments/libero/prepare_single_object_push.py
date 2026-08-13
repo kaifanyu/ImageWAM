@@ -24,7 +24,7 @@ for _path in (Path(__file__).resolve().parent, REPO_ROOT / "third_party" / "LIBE
     if str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
 
-from libero.libero.envs import OffScreenRenderEnv  # noqa: E402
+import side_camera  # noqa: E402
 from sample_endpoint_trajectories import (  # noqa: E402
     _object_motion_summary,
     _rollout_to_target,
@@ -33,6 +33,7 @@ from sample_endpoint_trajectories import (  # noqa: E402
     _views_from_obs,
     _write_json,
     _write_video,
+    composed_right_view,
 )
 
 
@@ -103,11 +104,11 @@ def main() -> None:
         shutil.rmtree(run_dir)
     run_dir.mkdir(parents=True)
 
-    env = OffScreenRenderEnv(
+    env = side_camera.open_env(
         bddl_file_name=str(bddl),
-        camera_heights=args.render_size,
-        camera_widths=args.render_size,
+        render_size=args.render_size,
     )
+    side_camera_pose = side_camera.installed_pose(env)
     try:
         env.seed(args.sim_seed)
         obs = env.reset()
@@ -145,9 +146,10 @@ def main() -> None:
         object_names, start_object_positions, start_object_quaternions = (
             _tracked_object_poses(env)
         )
-        start_main, start_wrist, start_image = _views_from_obs(obs, args.view_size)
+        right_view = composed_right_view()
+        start_main, start_right, start_image = _views_from_obs(obs, args.view_size)
         start_main.save(run_dir / "start_agentview.png")
-        start_wrist.save(run_dir / "start_wrist.png")
+        start_right.save(run_dir / f"start_{right_view}.png")
         start_image.save(run_dir / "start.png")
         np.save(run_dir / "start_state.npy", start_state)
 
@@ -172,9 +174,9 @@ def main() -> None:
             view_size=args.view_size,
             trace=trace,
         )
-        goal_main, goal_wrist, goal_image = _views_from_obs(obs, args.view_size)
+        goal_main, goal_right, goal_image = _views_from_obs(obs, args.view_size)
         goal_main.save(run_dir / "goal_oracle_agentview.png")
-        goal_wrist.save(run_dir / "goal_oracle_wrist.png")
+        goal_right.save(run_dir / f"goal_oracle_{right_view}.png")
         goal_image.save(run_dir / "goal_oracle.png")
         np.save(run_dir / "oracle_actions.npy", actions.astype(np.float32))
         np.save(run_dir / "oracle_eef_path.npy", eef_path.astype(np.float32))
@@ -204,6 +206,9 @@ def main() -> None:
             "sim_seed": args.sim_seed,
             "render_size": args.render_size,
             "view_size": args.view_size,
+            "composed_views": ["agentview", right_view],
+            "composed_right_view": right_view,
+            "side_camera": side_camera_pose,
             "start_state": "start_state.npy",
             "start_image": "start.png",
             "goal_oracle_image": "goal_oracle.png",

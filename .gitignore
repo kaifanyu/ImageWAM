@@ -15,6 +15,7 @@ evaluate_results/
 .env.local
 .env.*.local
 .tmp/
+other/*
 
 # Release-excluded code paths.
 src/imagewam/models/backbones/imagewam_joint.py

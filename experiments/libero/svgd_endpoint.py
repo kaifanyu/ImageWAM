@@ -43,7 +43,7 @@ Best evaluated trajectory artifacts written after all iterations:
     best_rollout.mp4              replay of the global lowest-energy particle
     best_actions.npy              7-D controller actions used by that replay
     best_eef_path.npy             actual end-effector position after every action
-    best_terminal.png             terminal [agentview | wrist] render
+    best_terminal.png             terminal [agentview | side profile] render
     best_terminal_state.npy       final flattened MuJoCo state
     best_terminal_latent.npy      selected encoder tokens for the terminal render
     best_metadata.json            selection and deterministic replay details
@@ -74,6 +74,8 @@ from sample_endpoint_trajectories import (  # noqa: E402
     _synchronize_controllers_to_sim_state,
     _views_from_obs,
     _write_video,
+    composed_right_view,
+    env_from_manifest,
 )
 from score_endpoint_candidates import (  # noqa: E402
     DinoV3FeatureMetric,
@@ -82,16 +84,55 @@ from score_endpoint_candidates import (  # noqa: E402
 )
 
 from libero.libero.envs import OffScreenRenderEnv  # noqa: E402
+from scene_geometry import write_scene_json  # noqa: E402
+
+
+def _capture_scene(
+    env: OffScreenRenderEnv,
+    out_dir: Path,
+    start_state: np.ndarray,
+    gripper_actions: list[np.ndarray] | None,
+    **landmarks: Any,
+) -> None:
+    """Write ``scene.json`` -- the static landmarks the 3D viewer draws around a run.
+
+    Rollout traces alone place the end effector in an empty void; this records
+    the table, the robot base, the arm at the start pose, and the objects, in the
+    same world frame.  Purely a visualisation aid, so it never raises.
+    """
+    try:
+        env.reset()
+        env.set_init_state(np.asarray(start_state))
+        _synchronize_controllers_to_sim_state(env, gripper_actions)
+    except Exception as error:  # pragma: no cover - simulator-only path
+        print(f"[scene] capture skipped: {type(error).__name__}: {error}", flush=True)
+        return
+    scene = write_scene_json(out_dir / "scene.json", env, **landmarks)
+    if scene is not None:
+        table = scene.get("table")
+        print(
+            "[scene] "
+            + (f"table top z={table['top_z']:.3f} ({table['source']})" if table else "no table")
+            + f", {len(scene['arm']['link_names'])} arm links"
+            + f", {len(scene['objects'])} tracked objects",
+            flush=True,
+        )
 
 
 def _view_latent(latent: np.ndarray, view_size: int, views: str) -> np.ndarray:
     """Restrict a two-view latent to one camera half.
 
-    The terminal render is ``[agentview | wrist]`` side by side, so the FLUX token
+    The terminal render is ``[agentview | right]`` side by side, so the FLUX token
     grid splits down its middle column.  This mirrors the split in
-    ``probe_latent_path._per_view_latent_rms``.  The wrist half stays nearly
-    constant until the last few millimetres of approach, so restricting the energy
-    to ``agentview`` removes a term that contributes magnitude but no gradient.
+    ``probe_latent_path._per_view_latent_rms``.  Which camera fills the right half
+    is the run's ``composed_right_view``; ``right`` and its legacy spelling
+    ``wrist`` both select it.
+
+    The old wrist half stayed nearly constant until the last few millimetres of
+    approach, which is why ``agentview`` alone is often the better-conditioned
+    objective.  A side-profile right half does not have that problem: it moves
+    over the whole trajectory and carries the height and reach agentview leaves
+    ambiguous.
     """
     if views == "both":
         return latent
@@ -304,6 +345,12 @@ class EndpointEnergy:
                 ),
                 "object_quaternions_wxyz": np.asarray(
                     rollout_trace["object_quaternions_wxyz"], dtype=np.float64
+                ),
+                "arm_link_names": np.asarray(
+                    rollout_trace.get("arm_link_names") or [], dtype=str
+                ),
+                "arm_link_positions": np.asarray(
+                    rollout_trace.get("arm_link_positions") or [], dtype=np.float32
                 ),
             }
             np.savez(trace_path, **trace_payload)
@@ -775,12 +822,13 @@ def main() -> None:
     parser.add_argument("--bandwidth-scale", type=float, default=1.0)
     parser.add_argument(
         "--latent-views",
-        choices=["both", "agentview", "wrist"],
+        choices=["both", "agentview", "right", "wrist"],
         default="both",
         help=(
-            "Which camera half of the two-view latent drives the energy. The wrist "
-            "half is nearly constant until the final few millimetres, so 'agentview' "
-            "gives a smoother, better-conditioned objective."
+            "Which camera half of the two-view latent drives the energy. 'right' "
+            "is whichever camera the run composed there ('wrist' is a legacy "
+            "spelling of the same half). With the side-profile camera, 'both' is "
+            "what makes height and reach observable to the objective."
         ),
     )
     parser.add_argument(
@@ -1081,17 +1129,22 @@ def main() -> None:
         else manifest.get("video_fps", 12)
     )
 
-    env = OffScreenRenderEnv(
-        bddl_file_name=str(manifest["bddl"]),
-        camera_heights=int(manifest["render_size"]),
-        camera_widths=int(manifest["render_size"]),
-    )
+    env = env_from_manifest(manifest)
     history: list[dict[str, Any]] = []
     global_best: dict[str, Any] | None = None
     best_replay: dict[str, Any] | None = None
     pull_summary: dict[str, Any] | None = None
     try:
         env.seed(int(manifest["sim_seed"]))
+        _capture_scene(
+            env,
+            out_dir,
+            start_state,
+            start_gripper_actions,
+            start_eef=actual_start_eef,
+            goal_eef=physical_goal,
+            bounds=bounds,
+        )
         energy_fn = EndpointEnergy(
             env,
             start_state,
@@ -1653,7 +1706,7 @@ def main() -> None:
             video_stride=best_video_stride,
             view_size=view_size,
         )
-        best_main, best_wrist, best_terminal = _views_from_obs(obs, view_size)
+        best_main, best_right, best_terminal = _views_from_obs(obs, view_size)
         best_terminal_latent = _encode_view_features(
             encoder,
             best_terminal,
@@ -1669,7 +1722,7 @@ def main() -> None:
         best_terminal_state = np.asarray(env.get_sim_state(), dtype=np.float64).copy()
 
         best_main.save(out_dir / "best_terminal_agentview.png")
-        best_wrist.save(out_dir / "best_terminal_wrist.png")
+        best_right.save(out_dir / f"best_terminal_{composed_right_view()}.png")
         best_terminal.save(out_dir / "best_terminal.png")
         np.save(out_dir / "best_actions.npy", best_actions.astype(np.float32))
         np.save(out_dir / "best_eef_path.npy", best_eef_path.astype(np.float32))
@@ -1764,7 +1817,7 @@ def main() -> None:
                 "terminal_state": "best_terminal_state.npy",
                 "terminal_image": "best_terminal.png",
                 "terminal_agentview": "best_terminal_agentview.png",
-                "terminal_wrist": "best_terminal_wrist.png",
+                "terminal_right": f"best_terminal_{composed_right_view()}.png",
                 "terminal_latent": "best_terminal_latent.npy",
                 "progress_plot": "progress.png",
                 "particle_motion_plot": "particle_motion.png",

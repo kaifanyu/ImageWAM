@@ -1,0 +1,85 @@
+(define (problem LIBERO_Tabletop_Manipulation)
+  (:domain robosuite)
+  (:language move the robot arm over the objects scattered on the table while keeping the gripper open)
+
+  ; Four objects with deliberately different silhouettes and heights, spread
+  ; across the reachable part of the 0.8 x 0.8 m tabletop (surface z = 0.90).
+  ; Goal poses are generated relative to these objects by
+  ; prepare_multi_object_goals.py, so the layout only has to be reachable,
+  ; mutually non-overlapping, and unambiguous in the agentview render.
+  ;
+  ; Two constraints fix these positions.
+  ;
+  ; Reach. Measured hover accuracy degrades past x = 0.08: a top-down hover at
+  ; x = 0.08 settles within 15 mm, at x = 0.10 within 40 mm, and at x = 0.14 it
+  ; misses by more than 20 mm at every height tried. A goal image the arm cannot
+  ; hold is an unreachable optimization target, so every object stays at
+  ; x <= 0.08.
+  ;
+  ; Clearance. Two corridors must stay open at the scene's z = 1.03 travel
+  ; height or the arm bulldozes the scene before reaching any goal pose:
+  ;   * staging, (-0.21, 0.00) -> (-0.05, 0.22), the reset-to-start move;
+  ;   * transit, x = -0.05 for y in [-0.22, 0.22], the start -> goal reach.
+  ; The 0.147 m red mug is the only object tall enough to foul either one; at
+  ; x = 0.07 it clears the transit corridor by 0.12 m. Everything else is under
+  ; 0.06 m tall, so the arm passes 0.08 m above it regardless.
+  (:regions
+    (mug_init_region
+      (:target main_table)
+      (:ranges ((0.06 0.16 0.08 0.18)))
+      (:yaw_rotation ((0.0 0.0)))
+    )
+    (bowl_init_region
+      (:target main_table)
+      (:ranges ((0.06 -0.19 0.08 -0.17)))
+      (:yaw_rotation ((0.0 0.0)))
+    )
+    (plate_init_region
+      (:target main_table)
+      (:ranges ((0.05 -0.01 0.07 0.01)))
+      (:yaw_rotation ((0.0 0.0)))
+    )
+    (box_init_region
+      (:target main_table)
+      (:ranges ((-0.18 -0.15 -0.16 -0.13)))
+      (:yaw_rotation ((0.0 0.0)))
+    )
+    ; A transparent site whose fixed height stays below LIBERO's `Up`
+    ; threshold, so stock reward/done remain false and cannot leak the answer
+    ; into goal-image-only optimization. Endpoint success is evaluated
+    ; numerically by the harness.
+    (never_success_region
+      (:target main_table)
+      (:ranges ((0.00 0.00 0.01 0.01)))
+    )
+  )
+
+  (:fixtures
+    main_table - table
+  )
+
+  (:objects
+    akita_black_bowl_1 - akita_black_bowl
+    plate_1 - plate
+    red_coffee_mug_1 - red_coffee_mug
+    cream_cheese_1 - cream_cheese
+  )
+
+  (:obj_of_interest
+    akita_black_bowl_1
+    plate_1
+    red_coffee_mug_1
+    cream_cheese_1
+  )
+
+  (:init
+    (On akita_black_bowl_1 main_table_bowl_init_region)
+    (On plate_1 main_table_plate_init_region)
+    (On red_coffee_mug_1 main_table_mug_init_region)
+    (On cream_cheese_1 main_table_box_init_region)
+  )
+
+  (:goal
+    (And (Up main_table_never_success_region))
+  )
+)

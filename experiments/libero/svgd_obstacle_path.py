@@ -39,10 +39,12 @@ from sample_endpoint_trajectories import (  # noqa: E402
     _views_from_obs,
     _write_json,
     _write_video,
+    env_from_manifest,
 )
 from score_endpoint_candidates import FluxAutoencoderMetric  # noqa: E402
 from svgd_endpoint import (  # noqa: E402
     _cap_updates,
+    _capture_scene,
     _optimizer_latent_metrics,
     _svgd_step,
     _view_latent,
@@ -88,6 +90,10 @@ def _save_trace(
         object_positions=np.asarray(trace["object_positions"], dtype=np.float64),
         object_quaternions_wxyz=np.asarray(
             trace["object_quaternions_wxyz"], dtype=np.float64
+        ),
+        arm_link_names=np.asarray(trace.get("arm_link_names") or [], dtype=str),
+        arm_link_positions=np.asarray(
+            trace.get("arm_link_positions") or [], dtype=np.float32
         ),
     )
 
@@ -648,7 +654,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--latent-views",
-        choices=["agentview", "wrist", "both"],
+        choices=["agentview", "right", "wrist", "both"],
         default="agentview",
     )
     parser.add_argument(
@@ -720,11 +726,7 @@ def main() -> None:
     ):
         parser.error("--collision-cloud must be inside --path-bounds")
 
-    env = OffScreenRenderEnv(
-        bddl_file_name=run_manifest["bddl"],
-        camera_heights=int(run_manifest["render_size"]),
-        camera_widths=int(run_manifest["render_size"]),
-    )
+    env = env_from_manifest(run_manifest)
     history: list[dict[str, Any]] = []
     global_best: dict[str, Any] | None = None
     try:
@@ -735,6 +737,15 @@ def main() -> None:
         object_names, _, initial_object_quaternions = _tracked_object_poses(env)
         if len(object_names) != 1:
             raise RuntimeError(f"Expected one tracked mug, found {object_names}")
+        _capture_scene(
+            env,
+            out_dir,
+            start_state,
+            gripper_actions,
+            start_eef=np.asarray(obs["robot0_eef_pos"], dtype=np.float64),
+            goal_eef=diagnostic_goal,
+            target_eef=fixed_target,
+        )
         energy_fn = PathEnergy(
             env,
             start_state,

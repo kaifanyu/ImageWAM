@@ -46,12 +46,15 @@ from sample_endpoint_trajectories import (  # noqa: E402
     _synchronize_controllers_to_sim_state,
     _views_from_obs,
     _write_video,
+    composed_right_view,
+    env_from_manifest,
 )
 from svgd_endpoint import (  # noqa: E402
     DinoV3FeatureMetric,
     EndpointEnergy,
     FluxAutoencoderMetric,
     _cap_updates,
+    _capture_scene,
     _encode_view_features,
     _finite_difference_grad,
     _goal_axis_diagnostics,
@@ -64,7 +67,6 @@ from svgd_endpoint import (  # noqa: E402
     _view_latent,
 )
 
-from libero.libero.envs import OffScreenRenderEnv  # noqa: E402
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -646,7 +648,17 @@ def _build_parser() -> argparse.ArgumentParser:
         default=[-0.06, -0.04, -0.32, 0.32, 1.02, 1.045],
     )
     parser.add_argument(
-        "--latent-views", choices=["both", "agentview", "wrist"], default="agentview"
+        "--diagnostic-goal-eef",
+        type=float,
+        nargs=3,
+        metavar=("X", "Y", "Z"),
+        help=(
+            "Known physical goal used only for plots/diagnostics; defaults to the manifest goal. "
+            "It never affects energy, gradients, or updates."
+        ),
+    )
+    parser.add_argument(
+        "--latent-views", choices=["both", "agentview", "right", "wrist"], default="agentview"
     )
     parser.add_argument(
         "--latent-distance",
@@ -747,7 +759,13 @@ def main() -> None:
         parser.error("Each bounds pair must have min < max")
     init_radius = np.asarray(args.init_radius, dtype=np.float64)
     actual_start_eef = np.asarray(manifest["actual_start_eef"], dtype=np.float64)
-    physical_goal = np.asarray(manifest["physical_goal_eef"], dtype=np.float64)
+    # The manifest goal is scene-level; a per-goal catalogue entry overrides it.
+    # Diagnostics only -- the optimizer never sees this pose.
+    physical_goal = (
+        np.asarray(args.diagnostic_goal_eef, dtype=np.float64)
+        if args.diagnostic_goal_eef is not None
+        else np.asarray(manifest["physical_goal_eef"], dtype=np.float64)
+    )
     view_size = int(manifest["view_size"])
     start_state = np.load(run_dir / "start_state.npy")
     start_gripper_actions = [
@@ -805,15 +823,20 @@ def main() -> None:
     )
     initial_particles = particles.copy()
 
-    env = OffScreenRenderEnv(
-        bddl_file_name=str(manifest["bddl"]),
-        camera_heights=int(manifest["render_size"]),
-        camera_widths=int(manifest["render_size"]),
-    )
+    env = env_from_manifest(manifest)
     history: list[dict[str, Any]] = []
     global_best: dict[str, Any] | None = None
     try:
         env.seed(int(manifest["sim_seed"]))
+        _capture_scene(
+            env,
+            out_dir,
+            start_state,
+            start_gripper_actions,
+            start_eef=actual_start_eef,
+            goal_eef=physical_goal,
+            bounds=bounds,
+        )
         energy_fn = EndpointEnergy(
             env,
             start_state,
@@ -1208,14 +1231,14 @@ def main() -> None:
             video_stride=args.best_video_stride,
             view_size=view_size,
         )
-        best_main, best_wrist, best_terminal = _views_from_obs(obs, view_size)
+        best_main, best_right, best_terminal = _views_from_obs(obs, view_size)
         best_latent = _encode_view_features(
             encoder, best_terminal, view_size, args.latent_views
         )
         best_metrics = _optimizer_latent_metrics(best_latent, goal_latent)
         best_actual_eef = np.asarray(obs["robot0_eef_pos"], dtype=np.float64)
         best_main.save(out_dir / "best_terminal_agentview.png")
-        best_wrist.save(out_dir / "best_terminal_wrist.png")
+        best_right.save(out_dir / f"best_terminal_{composed_right_view()}.png")
         best_terminal.save(out_dir / "best_terminal.png")
         np.save(out_dir / "best_actions.npy", best_actions.astype(np.float32))
         np.save(out_dir / "best_eef_path.npy", best_eef_path.astype(np.float32))

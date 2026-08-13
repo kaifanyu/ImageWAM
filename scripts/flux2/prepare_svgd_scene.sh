@@ -14,6 +14,11 @@ case "$SCENE" in
     DEFAULT_BDDL="experiments/libero/empty_table_move_arm.bddl"
     DEFAULT_PROMPT="Move the robot arm from one side of the empty table to the other while keeping its height, orientation, and gripper unchanged."
     ;;
+  multi-object)
+    DEFAULT_RUN_DIR="runs/multi_object_arm_preview"
+    DEFAULT_BDDL="experiments/libero/multi_object_table_move_arm.bddl"
+    DEFAULT_PROMPT="Move the robot arm over the objects on the table while keeping its height, orientation, and gripper unchanged."
+    ;;
   clutter)
     DEFAULT_RUN_DIR="runs/clutter_arm_preview"
     DEFAULT_BDDL="experiments/libero/clutter_table_move_arm.bddl"
@@ -45,7 +50,7 @@ case "$SCENE" in
     ;;
   *)
     echo "Unknown scene '$SCENE'." >&2
-    echo "Use empty | living-room | mug-obstacle | clutter | living-interaction | custom." >&2
+    echo "Use empty | living-room | mug-obstacle | multi-object | clutter | living-interaction | custom." >&2
     exit 2
     ;;
 esac
@@ -58,6 +63,9 @@ SIM_SEED="${SIM_SEED:-0}"
 TRAJECTORY_SEED="${TRAJECTORY_SEED:-7}"
 START_EEF="${START_EEF:-$DEFAULT_START_EEF}"
 GOAL_EEF="${GOAL_EEF:-$DEFAULT_GOAL_EEF}"
+# Right half of every composed render: 'sideview' is a pure side profile of the
+# table, 'wrist' is LIBERO's stock eye-in-hand camera.
+RIGHT_VIEW="${RIGHT_VIEW:-sideview}"
 
 if [[ ! "$NUM_TRAJECTORIES" =~ ^[0-9]+$ ]] || (( NUM_TRAJECTORIES < 5 )); then
   echo "NUM_TRAJECTORIES must be an integer of at least 5." >&2
@@ -82,7 +90,21 @@ ARGS=(
   --start-eef "${START_EEF_ARGS[@]}"
   --goal-eef "${GOAL_EEF_ARGS[@]}"
   --prompt "$PROMPT"
+  --right-view "$RIGHT_VIEW"
 )
+# Side-camera framing; unset means "derive it from the arena".
+if [[ -n "${SIDE_CAMERA_MARGIN:-}" ]]; then
+  ARGS+=(--side-camera-margin "$SIDE_CAMERA_MARGIN")
+fi
+if [[ -n "${SIDE_CAMERA_HEIGHT:-}" ]]; then
+  ARGS+=(--side-camera-height "$SIDE_CAMERA_HEIGHT")
+fi
+if [[ -n "${SIDE_CAMERA_ELEVATION_DEG:-}" ]]; then
+  ARGS+=(--side-camera-elevation-deg "$SIDE_CAMERA_ELEVATION_DEG")
+fi
+if [[ -n "${SIDE_CAMERA_X:-}" ]]; then
+  ARGS+=(--side-camera-x "$SIDE_CAMERA_X")
+fi
 if [[ -n "${DATASET_STATS_PATH:-}" ]]; then
   ARGS+=(--dataset-stats "$DATASET_STATS_PATH")
 fi
@@ -98,6 +120,7 @@ echo "[scene] run_dir=$RUN_DIR"
 echo "[scene] bddl=$BDDL"
 echo "[scene] start_eef=$START_EEF"
 echo "[scene] goal_eef=$GOAL_EEF"
+echo "[scene] composed views=[agentview | $RIGHT_VIEW]"
 imagewam_python -u -B experiments/libero/sample_endpoint_trajectories.py "${ARGS[@]}"
 
 if [[ "$SCENE" == "mug-obstacle" ]]; then

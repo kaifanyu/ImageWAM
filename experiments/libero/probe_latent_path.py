@@ -54,6 +54,8 @@ from sample_endpoint_trajectories import (  # noqa: E402
     _synchronize_controllers_to_sim_state,
     _views_from_obs,
     _write_video,
+    composed_right_view,
+    env_from_manifest,
 )
 from score_endpoint_candidates import (  # noqa: E402
     FluxAutoencoderMetric,
@@ -62,7 +64,6 @@ from score_endpoint_candidates import (  # noqa: E402
     _verify_metadata_hash,
 )
 
-from libero.libero.envs import OffScreenRenderEnv  # noqa: E402
 
 
 def _goal_latent(
@@ -719,11 +720,7 @@ def main() -> None:
         out_dir / "change_mask.png"
     )
 
-    env = OffScreenRenderEnv(
-        bddl_file_name=str(manifest["bddl"]),
-        camera_heights=int(manifest["render_size"]),
-        camera_widths=int(manifest["render_size"]),
-    )
+    env = env_from_manifest(manifest)
     raw_rows: list[dict[str, Any]] = []
     waypoints: list[dict[str, Any]] = []
     try:
@@ -782,7 +779,7 @@ def main() -> None:
                     video_stride=video_stride,
                     view_size=view_size,
                 )
-                main_image, wrist_image, terminal_image = _views_from_obs(obs, view_size)
+                main_image, right_image, terminal_image = _views_from_obs(obs, view_size)
                 if terminal_image.size != goal_image.size:
                     raise RuntimeError(
                         f"Terminal/goal image sizes differ: {terminal_image.size} != "
@@ -823,7 +820,7 @@ def main() -> None:
                     raise RuntimeError(f"Non-finite rollout at waypoint {waypoint_index}")
 
                 main_image.save(repeat_dir / "terminal_agentview.png")
-                wrist_image.save(repeat_dir / "terminal_wrist.png")
+                right_image.save(repeat_dir / f"terminal_{composed_right_view()}.png")
                 terminal_image.save(repeat_dir / "terminal.png")
                 np.save(repeat_dir / "terminal_latent.npy", terminal_latent.astype(np.float32))
                 np.save(repeat_dir / "actions.npy", actions.astype(np.float32))

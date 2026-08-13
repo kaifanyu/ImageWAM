@@ -20,7 +20,6 @@ for _path in (REPO_ROOT, REPO_ROOT / "third_party" / "LIBERO"):
     if str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
 
-from libero.libero.envs import OffScreenRenderEnv  # noqa: E402
 from sample_endpoint_trajectories import (  # noqa: E402
     _object_motion_summary,
     _rollout_to_target,
@@ -29,6 +28,8 @@ from sample_endpoint_trajectories import (  # noqa: E402
     _views_from_obs,
     _write_json,
     _write_video,
+    composed_right_view,
+    env_from_manifest,
 )
 
 
@@ -123,11 +124,7 @@ def main() -> None:
         ("safe_right", 0.0, 0.10),
     ]
 
-    env = OffScreenRenderEnv(
-        bddl_file_name=manifest["bddl"],
-        camera_heights=int(manifest["render_size"]),
-        camera_widths=int(manifest["render_size"]),
-    )
+    env = env_from_manifest(manifest)
     records: list[dict[str, Any]] = []
     sheet_entries: list[tuple[str, Image.Image]] = []
     try:
@@ -165,11 +162,11 @@ def main() -> None:
                 view_size=view_size,
                 trace=trace,
             )
-            terminal_main, terminal_wrist, terminal_image = _views_from_obs(
+            terminal_main, terminal_right, terminal_image = _views_from_obs(
                 obs, view_size
             )
             terminal_main.save(variant_dir / "terminal_agentview.png")
-            terminal_wrist.save(variant_dir / "terminal_wrist.png")
+            terminal_right.save(variant_dir / f"terminal_{composed_right_view()}.png")
             terminal_image.save(variant_dir / "terminal.png")
             np.save(variant_dir / "actions.npy", actions.astype(np.float32))
             np.save(variant_dir / "eef_path.npy", eef_path.astype(np.float32))
